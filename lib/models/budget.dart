@@ -6,6 +6,7 @@ class Budget {
   final String period; // monthly, weekly, yearly
   final String color;
   final String icon;
+  final String? month; // 添加月份字段
 
   // 添加额外属性以兼容现有服务
   String get categoryIcon => icon;
@@ -19,6 +20,7 @@ class Budget {
     required this.period,
     required this.color,
     required this.icon,
+    this.month,
   });
 
   Map<String, dynamic> toJson() {
@@ -30,6 +32,7 @@ class Budget {
       'period': period,
       'color': color,
       'icon': icon,
+      'month': month,
     };
   }
 
@@ -40,11 +43,15 @@ class Budget {
           categoryId is String ? int.tryParse(categoryId) ?? 0 : categoryId,
       'categoryName': categoryName,
       'amount': amount,
-      'period': period,
-      'color': color,
-      'icon': icon,
-      'month': DateTime.now().toString().substring(0, 7), // 添加当前年月作为month字段
-      'isMonthly': period == 'monthly' ? 1 : 0, // 兼容isMonthly字段
+      'categoryColor': color,
+      'categoryIcon': icon,
+      'month':
+          month ?? DateTime.now().toString().substring(0, 7), // 使用传入的月份或当前月份
+      'isMonthly':
+          (period == 'monthly' &&
+                  (categoryId == 0 || categoryId == '0' || categoryId == ''))
+              ? 1
+              : 0, // 月度总预算 isMonthly=1，分类预算 isMonthly=0
     };
 
     // 只有在id不为空且不是0的情况下，才添加id字段
@@ -65,6 +72,7 @@ class Budget {
       period: json['period'],
       color: json['color'],
       icon: json['icon'],
+      month: json['month'],
     );
   }
 
@@ -84,6 +92,7 @@ class Budget {
       period: map['period'] ?? (map['isMonthly'] == 1 ? 'monthly' : 'category'),
       color: map['color'] ?? map['categoryColor'] ?? '',
       icon: map['icon'] ?? map['categoryIcon'] ?? '',
+      month: map['month'],
     );
   }
 
@@ -95,6 +104,7 @@ class Budget {
     String? period,
     String? color,
     String? icon,
+    String? month,
   }) {
     return Budget(
       id: id ?? this.id,
@@ -104,6 +114,7 @@ class Budget {
       period: period ?? this.period,
       color: color ?? this.color,
       icon: icon ?? this.icon,
+      month: month ?? this.month,
     );
   }
 }

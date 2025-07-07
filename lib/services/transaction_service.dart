@@ -107,8 +107,8 @@ class TransactionService {
       );
       // --- 添加日志结束 --- //
 
+      int? toAccountId;
       if (transaction.type == '转账' && transaction.toAccountId != null) {
-        int toAccountId = 0;
         try {
           toAccountId =
               transaction.toAccountId is int
@@ -119,7 +119,7 @@ class TransactionService {
           throw Exception('目标账户ID格式错误');
         }
 
-        if (toAccountId <= 0) {
+        if (toAccountId == null || toAccountId <= 0) {
           print('[ERROR] 无效的目标账户ID: $toAccountId');
           throw Exception('无效的目标账户ID: $toAccountId');
         }
@@ -199,6 +199,13 @@ class TransactionService {
           if (transaction.type == '支出') {
             final account = accountsInfo['fromAccount'] as Account;
             final double amount = transaction.amount.abs();
+
+            // 添加对非负债账户的余额检查
+            if (!account.isDebt && amount > account.balance) {
+              print("[TXN] 非负债账户余额不足: 当前余额=${account.balance}, 支出金额=$amount");
+              throw Exception('账户余额不足，无法完成交易');
+            }
+
             // 移除对非负债账户的余额检查，只保留余额更新逻辑
             final newBalance = account.balance - amount;
             // --- 添加日志 --- //
@@ -227,17 +234,19 @@ class TransactionService {
               where: 'id = ?',
               whereArgs: [accountId],
             );
-          } else if (transaction.type == '转账' &&
-              transaction.toAccountId != null) {
+          } else if (transaction.type == '转账' && toAccountId != null) {
             final fromAccount = accountsInfo['fromAccount'] as Account;
             final toAccount = accountsInfo['toAccount'] as Account;
 
-            int toAccountId =
-                transaction.toAccountId is int
-                    ? transaction.toAccountId
-                    : int.tryParse(transaction.toAccountId.toString()) ?? 0;
-
             final double amount = transaction.amount.abs();
+
+            // 添加对非负债账户的余额检查
+            if (!fromAccount.isDebt && amount > fromAccount.balance) {
+              print(
+                "[TXN] 非负债账户余额不足: 当前余额=${fromAccount.balance}, 转账金额=$amount",
+              );
+              throw Exception('转出账户余额不足，无法完成转账交易');
+            }
 
             final newFromBalance = fromAccount.balance - amount;
             final newToBalance = toAccount.balance + amount;
@@ -262,7 +271,7 @@ class TransactionService {
               'accounts',
               {'balance': newToBalance},
               where: 'id = ?',
-              whereArgs: [toAccountId],
+              whereArgs: [toAccount.id],
             );
           }
           print("--- [TransactionService.addTransaction] 事务成功提交 ---");
@@ -278,19 +287,13 @@ class TransactionService {
     }
   }
 
-  // 更新交易记录并调整账户余额
-  Future<bool> updateTransaction(Transaction newTransaction) async {
+  // 更新交易记录
+  Future<void> updateTransaction(
+    Transaction oldTransaction,
+    Transaction newTransaction,
+  ) async {
     try {
       final Database db = await _databaseService.database;
-      if (newTransaction.id == null) {
-        throw Exception('更新交易需要提供有效的交易 ID');
-      }
-
-      // 获取原始交易记录
-      final oldTransaction = await getTransaction(newTransaction.id!);
-      if (oldTransaction == null) {
-        throw Exception('找不到要更新的原始交易记录');
-      }
 
       print("--- [TransactionService.updateTransaction] 开始 ---");
       print("旧交易: ${oldTransaction.toMap()}");
@@ -298,23 +301,50 @@ class TransactionService {
 
       // 预获取可能需要的账户信息
       final Map<int, Account> accountsCache = {};
-      accountsCache[oldTransaction.accountId] =
-          (await _accountService.getAccount(oldTransaction.accountId))!;
+      int oldAccountId =
+          oldTransaction.accountId is int
+              ? oldTransaction.accountId
+              : int.parse(oldTransaction.accountId.toString());
+      accountsCache[oldAccountId] =
+          (await _accountService.getAccount(oldAccountId))!;
+
+      // 定义两个变量用于可能的转账情况
+      int? oldToAccountId;
+      int? newToAccountId;
+
       if (oldTransaction.toAccountId != null) {
-        accountsCache[oldTransaction.toAccountId] =
-            (await _accountService.getAccount(oldTransaction.toAccountId))!;
-      }
-      if (newTransaction.accountId != oldTransaction.accountId) {
-        accountsCache[newTransaction.accountId] =
-            (await _accountService.getAccount(newTransaction.accountId))!;
-      }
-      if (newTransaction.toAccountId != null &&
-          newTransaction.toAccountId != oldTransaction.toAccountId) {
-        accountsCache[newTransaction.toAccountId] =
-            (await _accountService.getAccount(newTransaction.toAccountId))!;
+        oldToAccountId =
+            oldTransaction.toAccountId is int
+                ? oldTransaction.toAccountId
+                : int.parse(oldTransaction.toAccountId.toString());
+        // 确保转换后的ID不为null，并使用非空断言
+        if (oldToAccountId != null) {
+          accountsCache[oldToAccountId] =
+              (await _accountService.getAccount(oldToAccountId))!;
+        }
       }
 
-      print("账户缓存: ${accountsCache.map((k, v) => MapEntry(k, v.name))}");
+      int newAccountId =
+          newTransaction.accountId is int
+              ? newTransaction.accountId
+              : int.parse(newTransaction.accountId.toString());
+      if (newAccountId != oldAccountId) {
+        accountsCache[newAccountId] =
+            (await _accountService.getAccount(newAccountId))!;
+      }
+
+      if (newTransaction.toAccountId != null) {
+        newToAccountId =
+            newTransaction.toAccountId is int
+                ? newTransaction.toAccountId
+                : int.parse(newTransaction.toAccountId.toString());
+        // 确保转换后的ID不为null且与老的toAccountId不同，使用非空断言
+        if (newToAccountId != null &&
+            (oldToAccountId == null || newToAccountId != oldToAccountId)) {
+          accountsCache[newToAccountId] =
+              (await _accountService.getAccount(newToAccountId))!;
+        }
+      }
 
       // 开始事务
       print("--- [TransactionService.updateTransaction] 进入事务 ---");
@@ -323,7 +353,7 @@ class TransactionService {
           // --- 1. 回滚旧交易对账户余额的影响 --- //
           print("[TXN-UPDATE] 开始回滚旧交易影响...");
           if (oldTransaction.type == '支出') {
-            final account = accountsCache[oldTransaction.accountId]!;
+            final account = accountsCache[oldAccountId]!;
             final amount = oldTransaction.amount.abs();
             final originalBalance = account.balance + amount; // 回滚：加回支出金额
             print(
@@ -337,9 +367,9 @@ class TransactionService {
             );
             accountsCache[account.id!] = account.copyWith(
               balance: originalBalance,
-            ); // 更新缓存
+            );
           } else if (oldTransaction.type == '收入') {
-            final account = accountsCache[oldTransaction.accountId]!;
+            final account = accountsCache[oldAccountId]!;
             final amount = oldTransaction.amount.abs();
             final originalBalance = account.balance - amount; // 回滚：减去收入金额
             print(
@@ -353,222 +383,255 @@ class TransactionService {
             );
             accountsCache[account.id!] = account.copyWith(
               balance: originalBalance,
-            ); // 更新缓存
+            );
           } else if (oldTransaction.type == '转账' &&
-              oldTransaction.toAccountId != null) {
-            final fromAccount = accountsCache[oldTransaction.accountId]!;
-            final toAccount = accountsCache[oldTransaction.toAccountId]!;
+              oldTransaction.toAccountId != null &&
+              oldToAccountId != null) {
+            final fromAccount = accountsCache[oldAccountId]!;
+            // 确保当前缓存中存在目标账户
+            if (!accountsCache.containsKey(oldToAccountId)) {
+              print('[ERROR-TXN-UPDATE] 缓存中缺少目标账户, ID: $oldToAccountId');
+              throw Exception('缓存中缺少目标账户');
+            }
+            final toAccount = accountsCache[oldToAccountId]!;
             final amount = oldTransaction.amount.abs();
-            final originalFromBalance =
-                fromAccount.balance + amount; // 回滚：转出账户加回金额
-            final originalToBalance = toAccount.balance - amount; // 回滚：转入账户减去金额
+
+            // 回滚转出账户：加回转出金额
+            final fromOriginalBalance = fromAccount.balance + amount;
             print(
-              "[TXN-UPDATE] 回滚转账 (源): 账户ID=${fromAccount.id}, 回滚后余额=$originalFromBalance",
+              "[TXN-UPDATE] 回滚转账(转出): 账户ID=${fromAccount.id}, 回滚后余额=$fromOriginalBalance",
             );
             await txn.update(
               'accounts',
-              {'balance': originalFromBalance},
+              {'balance': fromOriginalBalance},
               where: 'id = ?',
               whereArgs: [fromAccount.id],
             );
+            accountsCache[fromAccount.id!] = fromAccount.copyWith(
+              balance: fromOriginalBalance,
+            );
+
+            // 回滚转入账户：减去转入金额
+            final toOriginalBalance = toAccount.balance - amount;
             print(
-              "[TXN-UPDATE] 回滚转账 (目标): 账户ID=${toAccount.id}, 回滚后余额=$originalToBalance",
+              "[TXN-UPDATE] 回滚转账(转入): 账户ID=${toAccount.id}, 回滚后余额=$toOriginalBalance",
             );
             await txn.update(
               'accounts',
-              {'balance': originalToBalance},
+              {'balance': toOriginalBalance},
               where: 'id = ?',
               whereArgs: [toAccount.id],
             );
-            accountsCache[fromAccount.id!] = fromAccount.copyWith(
-              balance: originalFromBalance,
-            ); // 更新缓存
             accountsCache[toAccount.id!] = toAccount.copyWith(
-              balance: originalToBalance,
-            ); // 更新缓存
+              balance: toOriginalBalance,
+            );
           }
-          print("[TXN-UPDATE] 旧交易影响回滚完成");
 
-          // --- 2. 更新交易记录本身 --- //
-          final map = newTransaction.toMap();
-          print("[TXN-UPDATE] 准备更新交易记录: $map");
-          map.remove('toAccountName'); // 数据库无此列
-          await txn.update(
-            'transactions',
-            map,
-            where: 'id = ?',
-            whereArgs: [newTransaction.id],
-          );
-          print("[TXN-UPDATE] 交易记录更新完成");
-
-          // --- 3. 应用新交易对账户余额的影响 --- //
+          // --- 2. 应用新交易的账户余额影响 --- //
           print("[TXN-UPDATE] 开始应用新交易影响...");
           if (newTransaction.type == '支出') {
-            final account = accountsCache[newTransaction.accountId]!;
+            final account = accountsCache[newAccountId]!;
             final amount = newTransaction.amount.abs();
-            // 移除对非负债账户的余额检查，只保留余额更新逻辑
-            final finalBalance = account.balance - amount; // 应用新支出
-            print(
-              "[TXN-UPDATE] 应用新支出: 账户ID=${account.id}, 更新后余额=$finalBalance",
-            );
+
+            // 添加对非负债账户的余额检查
+            if (!account.isDebt && amount > account.balance) {
+              print(
+                "[TXN-UPDATE] 非负债账户余额不足: 当前余额=${account.balance}, 支出金额=$amount",
+              );
+              throw Exception('账户余额不足，无法完成交易');
+            }
+
+            final newBalance = account.balance - amount; // 应用：减去支出金额
+            print("[TXN-UPDATE] 应用支出: 账户ID=${account.id}, 新余额=$newBalance");
             await txn.update(
               'accounts',
-              {'balance': finalBalance},
+              {'balance': newBalance},
               where: 'id = ?',
               whereArgs: [account.id],
             );
           } else if (newTransaction.type == '收入') {
-            final account = accountsCache[newTransaction.accountId]!;
+            final account = accountsCache[newAccountId]!;
             final amount = newTransaction.amount.abs();
-            final finalBalance = account.balance + amount; // 应用新收入
-            print(
-              "[TXN-UPDATE] 应用新收入: 账户ID=${account.id}, 更新后余额=$finalBalance",
-            );
+            final newBalance = account.balance + amount; // 应用：加上收入金额
+            print("[TXN-UPDATE] 应用收入: 账户ID=${account.id}, 新余额=$newBalance");
             await txn.update(
               'accounts',
-              {'balance': finalBalance},
+              {'balance': newBalance},
               where: 'id = ?',
               whereArgs: [account.id],
             );
           } else if (newTransaction.type == '转账' &&
-              newTransaction.toAccountId != null) {
-            final fromAccount = accountsCache[newTransaction.accountId]!;
-            final toAccount = accountsCache[newTransaction.toAccountId]!;
+              newTransaction.toAccountId != null &&
+              newToAccountId != null) {
+            final fromAccount = accountsCache[newAccountId]!;
+            // 确保当前缓存中存在目标账户
+            if (!accountsCache.containsKey(newToAccountId)) {
+              print('[ERROR-TXN-UPDATE] 缓存中缺少目标账户, ID: $newToAccountId');
+              throw Exception('缓存中缺少目标账户');
+            }
+            final toAccount = accountsCache[newToAccountId]!;
             final amount = newTransaction.amount.abs();
 
-            final finalFromBalance = fromAccount.balance - amount; // 应用新转出
-            final finalToBalance = toAccount.balance + amount; // 应用新转入
+            // 添加对非负债账户的余额检查
+            if (!fromAccount.isDebt && amount > fromAccount.balance) {
+              print(
+                "[TXN-UPDATE] 非负债账户余额不足: 当前余额=${fromAccount.balance}, 转账金额=$amount",
+              );
+              throw Exception('转出账户余额不足，无法完成转账交易');
+            }
+
+            // 应用转出账户：减去转出金额
+            final fromNewBalance = fromAccount.balance - amount;
             print(
-              "[TXN-UPDATE] 应用新转账 (源): 账户ID=${fromAccount.id}, 更新后余额=$finalFromBalance",
+              "[TXN-UPDATE] 应用转账(转出): 账户ID=${fromAccount.id}, 新余额=$fromNewBalance",
             );
             await txn.update(
               'accounts',
-              {'balance': finalFromBalance},
+              {'balance': fromNewBalance},
               where: 'id = ?',
               whereArgs: [fromAccount.id],
             );
+
+            // 应用转入账户：加上转入金额
+            final toNewBalance = toAccount.balance + amount;
             print(
-              "[TXN-UPDATE] 应用新转账 (目标): 账户ID=${toAccount.id}, 更新后余额=$finalToBalance",
+              "[TXN-UPDATE] 应用转账(转入): 账户ID=${toAccount.id}, 新余额=$toNewBalance",
             );
             await txn.update(
               'accounts',
-              {'balance': finalToBalance},
+              {'balance': toNewBalance},
               where: 'id = ?',
               whereArgs: [toAccount.id],
             );
           }
-          print("--- [TransactionService.updateTransaction] 事务成功提交 ---");
+
+          // --- 3. 更新交易记录 --- //
+          await txn.update(
+            'transactions',
+            newTransaction.toMap(),
+            where: 'id = ?',
+            whereArgs: [newTransaction.id],
+          );
+
+          print("--- [TransactionService.updateTransaction] 事务完成 ---");
         } catch (e) {
-          print('[ERROR-TXN-UPDATE] 更新事务内部错误: $e');
+          print("--- [TransactionService.updateTransaction] 事务失败: $e ---");
           rethrow;
         }
       });
     } catch (e) {
-      print('[ERROR] TransactionService.updateTransaction 外层错误: $e');
+      print('更新交易记录失败: $e');
       rethrow;
     }
-    return true; // 如果没有抛出异常，则认为成功
   }
 
   // 删除交易记录并调整账户余额
-  Future<bool> deleteTransaction(int id) async {
+  Future<bool> deleteTransaction(Transaction transaction) async {
     try {
       final Database db = await _databaseService.database;
 
-      // 获取要删除的交易记录
-      final transactionToDelete = await getTransaction(id);
-      if (transactionToDelete == null) {
-        throw Exception('找不到要删除的交易记录');
+      if (transaction.id == null) {
+        throw Exception('删除交易需要提供有效的交易ID');
       }
 
-      print("--- [TransactionService.deleteTransaction] 开始 ---");
-      print("准备删除交易: ${transactionToDelete.toMap()}");
+      // 获取交易所涉及的账户
+      final int accountId =
+          transaction.accountId is int
+              ? transaction.accountId
+              : int.parse(transaction.accountId.toString());
+      final Account? account = await _accountService.getAccount(accountId);
 
-      // 预获取需要的账户信息
-      final Map<int, Account> accountsCache = {};
-      accountsCache[transactionToDelete.accountId] =
-          (await _accountService.getAccount(transactionToDelete.accountId))!;
-      if (transactionToDelete.toAccountId != null) {
-        accountsCache[transactionToDelete.toAccountId] =
-            (await _accountService.getAccount(
-              transactionToDelete.toAccountId,
-            ))!;
+      if (account == null) {
+        throw Exception('找不到关联的账户，无法处理账户余额调整');
       }
-      print("账户缓存: ${accountsCache.map((k, v) => MapEntry(k, v.name))}");
+
+      Account? toAccount;
+      if (transaction.type == '转账' && transaction.toAccountId != null) {
+        final int toAccountId =
+            transaction.toAccountId is int
+                ? transaction.toAccountId
+                : int.parse(transaction.toAccountId.toString());
+        toAccount = await _accountService.getAccount(toAccountId);
+
+        if (toAccount == null) {
+          throw Exception('找不到转账目标账户，无法完成删除操作');
+        }
+      }
 
       // 开始事务
-      print("--- [TransactionService.deleteTransaction] 进入事务 ---");
+      print("--- [TransactionService.deleteTransaction] 开始事务 ---");
       await db.transaction((txn) async {
         try {
-          // --- 1. 回滚交易对账户余额的影响 --- //
-          print("[TXN-DELETE] 开始回滚交易影响...");
-          if (transactionToDelete.type == '支出') {
-            final account = accountsCache[transactionToDelete.accountId]!;
-            final amount = transactionToDelete.amount.abs();
-            final originalBalance = account.balance + amount; // 回滚：加回支出
-            print(
-              "[TXN-DELETE] 回滚支出: 账户ID=${account.id}, 回滚后余额=$originalBalance",
-            );
+          // 根据交易类型更新账户余额
+          if (transaction.type == '支出') {
+            // 删除支出：增加账户余额
+            final double amount = transaction.amount.abs();
+            final double newBalance = account.balance + amount;
+
+            print("[TXN-DELETE] 回滚支出: 账户ID=${account.id}, 新余额=$newBalance");
             await txn.update(
               'accounts',
-              {'balance': originalBalance},
+              {'balance': newBalance},
               where: 'id = ?',
               whereArgs: [account.id],
             );
-          } else if (transactionToDelete.type == '收入') {
-            final account = accountsCache[transactionToDelete.accountId]!;
-            final amount = transactionToDelete.amount.abs();
-            final originalBalance = account.balance - amount; // 回滚：减去收入
-            print(
-              "[TXN-DELETE] 回滚收入: 账户ID=${account.id}, 回滚后余额=$originalBalance",
-            );
+          } else if (transaction.type == '收入') {
+            // 删除收入：减少账户余额
+            final double amount = transaction.amount.abs();
+            final double newBalance = account.balance - amount;
+
+            print("[TXN-DELETE] 回滚收入: 账户ID=${account.id}, 新余额=$newBalance");
             await txn.update(
               'accounts',
-              {'balance': originalBalance},
+              {'balance': newBalance},
               where: 'id = ?',
               whereArgs: [account.id],
             );
-          } else if (transactionToDelete.type == '转账' &&
-              transactionToDelete.toAccountId != null) {
-            final fromAccount = accountsCache[transactionToDelete.accountId]!;
-            final toAccount = accountsCache[transactionToDelete.toAccountId]!;
-            final amount = transactionToDelete.amount.abs();
-            final originalFromBalance =
-                fromAccount.balance + amount; // 回滚：源账户加回
-            final originalToBalance = toAccount.balance - amount; // 回滚：目标账户减去
+          } else if (transaction.type == '转账' && toAccount != null) {
+            // 删除转账：恢复转出和转入账户余额
+            final double amount = transaction.amount.abs();
+
+            // 恢复转出账户余额
+            final double fromNewBalance = account.balance + amount;
             print(
-              "[TXN-DELETE] 回滚转账 (源): 账户ID=${fromAccount.id}, 回滚后余额=$originalFromBalance",
+              "[TXN-DELETE] 回滚转账(转出): 账户ID=${account.id}, 新余额=$fromNewBalance",
             );
             await txn.update(
               'accounts',
-              {'balance': originalFromBalance},
+              {'balance': fromNewBalance},
               where: 'id = ?',
-              whereArgs: [fromAccount.id],
+              whereArgs: [account.id],
             );
+
+            // 恢复转入账户余额
+            final double toNewBalance = toAccount.balance - amount;
             print(
-              "[TXN-DELETE] 回滚转账 (目标): 账户ID=${toAccount.id}, 回滚后余额=$originalToBalance",
+              "[TXN-DELETE] 回滚转账(转入): 账户ID=${toAccount.id}, 新余额=$toNewBalance",
             );
             await txn.update(
               'accounts',
-              {'balance': originalToBalance},
+              {'balance': toNewBalance},
               where: 'id = ?',
               whereArgs: [toAccount.id],
             );
           }
-          print("[TXN-DELETE] 交易影响回滚完成");
 
-          // --- 2. 删除交易记录 --- //
-          print("[TXN-DELETE] 准备删除交易记录 ID: $id");
-          await txn.delete('transactions', where: 'id = ?', whereArgs: [id]);
-          print("[TXN-DELETE] 交易记录删除完成");
-          print("--- [TransactionService.deleteTransaction] 事务成功提交 ---");
+          // 删除交易记录
+          final result = await txn.delete(
+            'transactions',
+            where: 'id = ?',
+            whereArgs: [transaction.id],
+          );
+
+          print("[TXN-DELETE] 删除交易记录，影响行数: $result");
+          print("--- [TransactionService.deleteTransaction] 事务完成 ---");
         } catch (e) {
-          print('[ERROR-TXN-DELETE] 删除事务内部错误: $e');
+          print("--- [TransactionService.deleteTransaction] 事务失败: $e ---");
           rethrow;
         }
       });
     } catch (e) {
-      print('[ERROR] TransactionService.deleteTransaction 外层错误: $e');
+      print('删除交易记录失败: $e');
       rethrow;
     }
     return true; // 如果没有抛出异常，则认为成功
@@ -637,56 +700,72 @@ class TransactionService {
     return transactions;
   }
 
-  // 获取特定月份的收入总额
+  // 获取特定月份的收入总额 - 完全重写的方法
   Future<double> getMonthlyIncome(int year, int month) async {
-    final db = await dbHelper.database;
+    print("[CRITICAL] 重新实现的getMonthlyIncome方法被调用: $year-$month");
 
-    // 计算月份的起始日期和结束日期
-    final startDate = DateTime(year, month, 1);
-    final endDate = DateTime(year, month + 1, 0); // 当月最后一天
+    try {
+      final db = await _databaseService.database;
+      final yearStr = year.toString();
+      final monthStr = month.toString().padLeft(2, '0');
+      final monthFormat = "$yearStr-$monthStr";
 
-    final startDateStr = startDate.toString().substring(0, 10);
-    final endDateStr = endDate.toString().substring(0, 10);
+      // 直接使用SQL查询来获取月份收入总额
+      final result = await db.rawQuery(
+        '''
+        SELECT COALESCE(SUM(amount), 0) as totalIncome
+        FROM transactions
+        WHERE type = '收入' AND substr(date, 1, 7) = ?
+      ''',
+        [monthFormat],
+      );
 
-    // 查询收入总额
-    final result = await db.rawQuery('''
-      SELECT COALESCE(SUM(amount), 0) as totalIncome
-      FROM transactions
-      WHERE type = '收入' 
-      AND date BETWEEN '$startDateStr' AND '$endDateStr'
-    ''');
+      final income = result.first['totalIncome'];
+      print("[CRITICAL] $year年$month月收入统计: SQL查询结果 $income");
 
-    if (result.isNotEmpty) {
-      return result.first['totalIncome'] as double? ?? 0.0;
+      // 处理不同类型的返回值，确保返回double
+      if (income == null) return 0.0;
+      if (income is int) return income.toDouble();
+      if (income is double) return income;
+      return double.tryParse(income.toString()) ?? 0.0;
+    } catch (e) {
+      print("[CRITICAL ERROR] 获取月度收入时发生错误: $e");
+      return 0.0;
     }
-
-    return 0.0;
   }
 
-  // 获取特定月份的支出总额
+  // 获取特定月份的支出总额 - 完全重写的方法
   Future<double> getMonthlyExpense(int year, int month) async {
-    final db = await dbHelper.database;
+    print("[CRITICAL] 重新实现的getMonthlyExpense方法被调用: $year-$month");
 
-    // 计算月份的起始日期和结束日期
-    final startDate = DateTime(year, month, 1);
-    final endDate = DateTime(year, month + 1, 0); // 当月最后一天
+    try {
+      final db = await _databaseService.database;
+      final yearStr = year.toString();
+      final monthStr = month.toString().padLeft(2, '0');
+      final monthFormat = "$yearStr-$monthStr";
 
-    final startDateStr = startDate.toString().substring(0, 10);
-    final endDateStr = endDate.toString().substring(0, 10);
+      // 直接使用SQL查询来获取月份支出总额
+      final result = await db.rawQuery(
+        '''
+        SELECT COALESCE(SUM(amount), 0) as totalExpense
+        FROM transactions
+        WHERE type = '支出' AND substr(date, 1, 7) = ?
+      ''',
+        [monthFormat],
+      );
 
-    // 查询支出总额
-    final result = await db.rawQuery('''
-      SELECT COALESCE(SUM(amount), 0) as totalExpense
-      FROM transactions
-      WHERE type = '支出' 
-      AND date BETWEEN '$startDateStr' AND '$endDateStr'
-    ''');
+      final expense = result.first['totalExpense'];
+      print("[CRITICAL] $year年$month月支出统计: SQL查询结果 $expense");
 
-    if (result.isNotEmpty) {
-      return result.first['totalExpense'] as double? ?? 0.0;
+      // 处理不同类型的返回值，确保返回double
+      if (expense == null) return 0.0;
+      if (expense is int) return expense.toDouble();
+      if (expense is double) return expense;
+      return double.tryParse(expense.toString()) ?? 0.0;
+    } catch (e) {
+      print("[CRITICAL ERROR] 获取月度支出时发生错误: $e");
+      return 0.0;
     }
-
-    return 0.0;
   }
 
   // 获取特定分类的月度支出
@@ -697,27 +776,33 @@ class TransactionService {
   ) async {
     final db = await dbHelper.database;
 
-    // 计算月份的起始日期和结束日期
-    final startDate = DateTime(year, month, 1);
-    final endDate = DateTime(year, month + 1, 0); // 当月最后一天
+    // 构建年月字符串用于日志
+    final String yearStr = year.toString();
+    final String monthStr = month.toString().padLeft(2, '0');
 
-    final startDateStr = startDate.toString().substring(0, 10);
-    final endDateStr = endDate.toString().substring(0, 10);
+    print(
+      "[INFO] getCategoryMonthlyExpense: 查询月份 $yearStr-$monthStr, 分类 $categoryId",
+    );
 
-    // 查询特定分类的支出总额
+    // 使用substr函数提取日期的年月部分进行匹配
     final result = await db.rawQuery(
       '''
       SELECT COALESCE(SUM(amount), 0) as categoryExpense
       FROM transactions
       WHERE type = '支出' 
       AND categoryId = ?
-      AND date BETWEEN '$startDateStr' AND '$endDateStr'
+      AND substr(date, 1, 7) = ?
     ''',
-      [categoryId],
+      [categoryId, "$yearStr-$monthStr"],
     );
 
     if (result.isNotEmpty) {
-      return result.first['categoryExpense'] as double? ?? 0.0;
+      final expense = result.first['categoryExpense'];
+      print("[SQL_RESULT] 分类月度支出查询结果: $expense");
+      if (expense is int) {
+        return expense.toDouble();
+      }
+      return expense as double? ?? 0.0;
     }
 
     return 0.0;
@@ -768,30 +853,35 @@ class TransactionService {
   ) async {
     final Database db = await _databaseService.database;
 
-    // SQLite 不直接支持 strftime 在 GROUP BY 或 WHERE 子句中，但我们可以使用 LIKE
-    // 确保 yearMonth 格式为 'yyyyMM'
-    if (yearMonth.length != 6) {
+    // 规范化月份格式：支持yyyy-MM和yyyyMM两种格式
+    String yearMonthStr;
+
+    if (yearMonth.contains('-')) {
+      // 格式已经是yyyy-MM，直接使用
+      yearMonthStr = yearMonth;
+      print("[INFO] getMonthlyExpenseByCategory: 使用已格式化的月份 $yearMonth");
+    } else if (yearMonth.length == 6) {
+      // 格式为yyyyMM，转换为yyyy-MM
+      final year = yearMonth.substring(0, 4);
+      final month = yearMonth.substring(4, 6);
+      yearMonthStr = "$year-$month";
+      print(
+        "[INFO] getMonthlyExpenseByCategory: 转换月份格式 $yearMonth → $yearMonthStr",
+      );
+    } else {
       print("[ERROR] getMonthlyExpenseByCategory: 无效的月份格式 '$yearMonth'");
       return {};
     }
-    final String year = yearMonth.substring(0, 4);
-    final String month = yearMonth.substring(4, 6);
-    // 构建日期匹配模式，例如 '2023-10-%'
-    final String datePattern = '$year-$month-%';
-
-    print(
-      "[INFO] getMonthlyExpenseByCategory: 查询月份 $yearMonth, 使用模式 $datePattern",
-    );
 
     // 查询指定月份、类型为支出的交易，按类别分组并计算总额
     final List<Map<String, dynamic>> result = await db.rawQuery(
       '''
       SELECT categoryName, SUM(amount) as total
       FROM transactions
-      WHERE type = ? AND date LIKE ?
+      WHERE type = ? AND substr(date, 1, 7) = ?
       GROUP BY categoryName
     ''',
-      ['支出', datePattern],
+      ['支出', yearMonthStr],
     );
 
     final Map<String, double> categoryExpenses = {};
@@ -808,4 +898,92 @@ class TransactionService {
   }
 
   // --- 新增结束 --- //
+
+  // 获取指定账户的交易记录
+  Future<List<Transaction>> getTransactionsByAccount(int accountId) async {
+    try {
+      final Database db = await _databaseService.database;
+      final List<Map<String, dynamic>> maps = await db.query(
+        'transactions',
+        where: 'accountId = ? OR toAccountId = ?',
+        whereArgs: [accountId, accountId],
+        orderBy: 'date DESC',
+      );
+      return List.generate(maps.length, (i) => Transaction.fromMap(maps[i]));
+    } catch (e) {
+      print('获取账户交易记录失败: $e');
+      return [];
+    }
+  }
+
+  // --- 调试：打印某个月份的所有交易记录 --- //
+  Future<void> debugPrintMonthTransactions(int year, int month) async {
+    final db = await dbHelper.database;
+    final String yearStr = year.toString();
+    final String monthStr = month.toString().padLeft(2, '0');
+
+    print("====== [DEBUG] $yearStr-$monthStr 月份交易记录 ======");
+
+    // 查询指定月份的所有交易
+    final result = await db.rawQuery(
+      '''
+      SELECT id, type, amount, date, categoryName, accountName
+      FROM transactions
+      WHERE substr(date, 1, 7) = ?
+      ORDER BY date DESC
+    ''',
+      ["$yearStr-$monthStr"],
+    );
+
+    if (result.isEmpty) {
+      print("[DEBUG] 该月份无交易记录");
+    } else {
+      print("[DEBUG] 找到 ${result.length} 条交易记录:");
+      for (var row in result) {
+        print(
+          "[DEBUG] ID: ${row['id']}, 类型: ${row['type']}, 金额: ${row['amount']}, 日期: ${row['date']}, 分类: ${row['categoryName']}, 账户: ${row['accountName']}",
+        );
+      }
+    }
+
+    // 查询当月收入总额
+    final incomeResult = await db.rawQuery(
+      '''
+      SELECT COALESCE(SUM(amount), 0) as totalIncome
+      FROM transactions
+      WHERE type = '收入' AND substr(date, 1, 7) = ?
+    ''',
+      ["$yearStr-$monthStr"],
+    );
+
+    final income = incomeResult.first['totalIncome'];
+    print("[DEBUG] 当月收入总额: $income");
+
+    // 查询当月支出总额
+    final expenseResult = await db.rawQuery(
+      '''
+      SELECT COALESCE(SUM(amount), 0) as totalExpense
+      FROM transactions
+      WHERE type = '支出' AND substr(date, 1, 7) = ?
+    ''',
+      ["$yearStr-$monthStr"],
+    );
+
+    final expense = expenseResult.first['totalExpense'];
+    print("[DEBUG] 当月支出总额: $expense");
+
+    // 查询原始数据中的日期格式
+    final dateFormatResult = await db.rawQuery('''
+      SELECT id, date FROM transactions LIMIT 5
+    ''');
+
+    if (dateFormatResult.isNotEmpty) {
+      print("[DEBUG] 数据库中的日期格式样例:");
+      for (var row in dateFormatResult) {
+        print("[DEBUG] ID: ${row['id']}, 日期原始格式: ${row['date']}");
+      }
+    }
+
+    print("====== [DEBUG] 调试信息结束 ======");
+  }
 }

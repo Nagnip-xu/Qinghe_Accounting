@@ -114,6 +114,61 @@ class CategoryProvider with ChangeNotifier {
     }
   }
 
+  // 查找分类，如果不存在则创建新分类并返回ID
+  Future<int?> findOrCreateCategory(
+    String name,
+    String type,
+    String icon,
+  ) async {
+    // 先检查是否已存在相同名称的分类
+    List<Category> categories =
+        type == '支出' ? _expenseCategories : _incomeCategories;
+
+    // 查找已有分类
+    try {
+      Category existingCategory = categories.firstWhere((c) => c.name == name);
+      // 如果找到已有分类，直接返回ID
+      return existingCategory.id;
+    } catch (e) {
+      // 如果抛出异常，说明分类不存在，需要创建
+      // 根据类型为分类选择默认颜色
+      String defaultColor;
+      if (type == '支出') {
+        // 为支出分类选择一个默认颜色
+        defaultColor = "FF5252"; // 红色
+      } else {
+        // 为收入分类选择一个默认颜色
+        defaultColor = "4CAF50"; // 绿色
+      }
+
+      final newCategory = Category(
+        name: name,
+        type: type,
+        icon: icon,
+        color: defaultColor,
+      );
+
+      final success = await addCategory(newCategory);
+      if (success) {
+        // 创建成功后，重新获取分类列表查找新分类的ID
+        await initCategories();
+
+        // 再次尝试查找
+        categories = type == '支出' ? _expenseCategories : _incomeCategories;
+        try {
+          final createdCategory = categories.firstWhere((c) => c.name == name);
+          return createdCategory.id;
+        } catch (e) {
+          print('创建分类后仍未找到该分类: $name');
+          return null;
+        }
+      } else {
+        print('创建分类失败: $name');
+        return null;
+      }
+    }
+  }
+
   void _setLoading(bool loading) {
     _isLoading = loading;
     notifyListeners();

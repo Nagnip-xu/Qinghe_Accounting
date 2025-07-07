@@ -11,7 +11,8 @@ import '../utils/shared_prefs.dart';
 import '../services/backup_service.dart';
 import '../services/sound_service.dart';
 import '../services/auth_service.dart';
-import '../widgets/common/toast_message.dart';
+import '../utils/toast_message.dart';
+import 'package:flutter/services.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -73,6 +74,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _checkFingerprintWithTimeout(timeout),
         _getBackupTimeWithTimeout(timeout),
       ]);
+
+      // 更新上次备份时间显示
+      await _updateLastBackupTime();
     } catch (e) {
       debugPrint('设置页面初始化出错: $e');
       // 即使出错也要结束加载状态，显示可用的设置项
@@ -187,25 +191,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         onTimeout: () => null,
       );
 
-      if (lastBackup != null && mounted) {
-        // 格式化上次备份时间为更友好的显示格式
-        final now = DateTime.now();
-        final difference = now.difference(lastBackup);
-
-        String formattedTime;
-        if (difference.inDays > 0) {
-          formattedTime = '${difference.inDays}天前';
-        } else if (difference.inHours > 0) {
-          formattedTime = '${difference.inHours}小时前';
-        } else if (difference.inMinutes > 0) {
-          formattedTime = '${difference.inMinutes}分钟前';
-        } else {
-          formattedTime = '刚刚';
-        }
-
-        setState(() {
-          _lastBackupTime = formattedTime;
-        });
+      // 直接调用统一的更新方法
+      if (lastBackup != null) {
+        await _updateLastBackupTime();
       }
     } catch (e) {
       debugPrint('获取最后备份时间失败: $e');
@@ -293,6 +281,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
 
+    // 添加确认对话框
+    final bool confirmBackup =
+        await showDialog<bool>(
+          context: _context,
+          builder:
+              (context) => AlertDialog(
+                title: const Text('确认备份'),
+                content: const Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('确定要立即备份您的数据吗？'),
+                    SizedBox(height: 12),
+                    Text(
+                      '备份将保存您的所有账户、交易和设置数据。',
+                      style: TextStyle(fontSize: 14, color: Colors.grey),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('取消'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('确认备份'),
+                  ),
+                ],
+              ),
+        ) ??
+        false;
+
+    // 如果用户取消，则不执行备份
+    if (!confirmBackup) return;
+
     // 显示进度对话框
     showDialog(
       context: _context,
@@ -326,12 +350,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // 备份成功后关闭进度对话框
       if (mounted) Navigator.of(_context).pop();
 
+      // 更新上次备份时间显示
+      await _updateLastBackupTime();
+
+      // 备份成功后显示详情对话框
       if (mounted) {
-        // 显示备份成功对话框
         showDialog(
           context: _context,
           builder:
-              (BuildContext context) => AlertDialog(
+              (context) => AlertDialog(
                 title: const Text('备份成功'),
                 content: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -339,14 +366,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   children: [
                     const Text('数据已成功备份到手机下载目录'),
                     const SizedBox(height: 8),
-                    Text('文件名：${path_lib.basename(backupPath)}'),
+                    Text('文件名：${backupPath.split('/').last}'),
                     Text('文件大小：$fileSizeStr'),
                     Text(
-                      '备份时间：${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())}',
+                      '备份时间: ${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())}',
                     ),
                     const SizedBox(height: 12),
                     const Text(
-                      '您可以在手机文件管理器中的"下载/轻合记账/备份"文件夹找到备份文件',
+                      '您可以在手机文件管理器中的"下载/青禾记账/备份"文件夹找到备份文件',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 13,
@@ -369,7 +396,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         Navigator.pop(context);
                         ToastMessage.show(
                           _context,
-                          '备份文件位于手机下载目录中的"轻合记账/备份"文件夹',
+                          '备份文件位于手机下载目录中的"青禾记账/备份"文件夹',
                           icon: Icons.folder_open,
                           backgroundColor: Colors.blue.withOpacity(0.9),
                         );
@@ -408,6 +435,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
           backgroundColor: Colors.red.withOpacity(0.9),
         );
       }
+    }
+  }
+
+  // 更新上次备份时间显示
+  Future<void> _updateLastBackupTime() async {
+    try {
+      final lastBackup = await BackupService.getLastBackupTime();
+      if (lastBackup != null && mounted) {
+        setState(() {
+          // 计算相对时间（几分钟前、几小时前、几天前）
+          final now = DateTime.now();
+          final difference = now.difference(lastBackup);
+
+          if (difference.inDays > 0) {
+            _lastBackupTime = '${difference.inDays}天前';
+          } else if (difference.inHours > 0) {
+            _lastBackupTime = '${difference.inHours}小时前';
+          } else if (difference.inMinutes > 0) {
+            _lastBackupTime = '${difference.inMinutes}分钟前';
+          } else {
+            _lastBackupTime = '刚刚';
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('获取上次备份时间失败: $e');
     }
   }
 
@@ -613,6 +666,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // 显示恢复成功对话框
                   showDialog(
                     context: _context,
+                    barrierDismissible: false, // 防止用户点击外部关闭
                     builder:
                         (BuildContext context) => AlertDialog(
                           title: const Text('恢复成功'),
@@ -627,18 +681,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                               const SizedBox(height: 16),
                               const Text(
-                                '需要重启应用以加载恢复的数据',
+                                '⚠️ 重要提示 ⚠️',
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   color: Colors.red,
+                                  fontSize: 16,
                                 ),
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                '您必须完全退出并重新启动应用才能看到恢复的数据。请按照以下步骤操作：',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                '1. 点击"退出应用"按钮\n'
+                                '2. 从最近任务中移除本应用\n'
+                                '3. 重新打开应用',
+                                style: TextStyle(color: Colors.black87),
                               ),
                             ],
                           ),
                           actions: [
                             TextButton(
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text('确定'),
+                              onPressed: () {
+                                Navigator.pop(context);
+                                ToastMessage.show(
+                                  _context,
+                                  '请完全退出并重新打开应用以加载恢复的数据',
+                                  icon: Icons.exit_to_app,
+                                  backgroundColor: Colors.blue.withOpacity(0.9),
+                                );
+                              },
+                              child: const Text('稍后退出'),
                             ),
                             TextButton(
                               onPressed: () {
@@ -646,13 +721,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 Navigator.pop(context);
                                 ToastMessage.show(
                                   _context,
-                                  '请手动关闭并重新打开应用',
+                                  '请完全关闭并重新打开应用以加载恢复的数据',
                                   icon: Icons.exit_to_app,
-                                  backgroundColor: Colors.blue.withOpacity(0.9),
+                                  backgroundColor: Colors.red.withOpacity(0.9),
                                 );
+                                // 如果是 Android，可以使用 SystemNavigator.pop()
+                                if (Platform.isAndroid) {
+                                  SystemNavigator.pop();
+                                }
                               },
                               style: TextButton.styleFrom(
-                                foregroundColor: Colors.red,
+                                foregroundColor: Colors.white,
+                                backgroundColor: Colors.red,
                               ),
                               child: const Text('退出应用'),
                             ),
@@ -1129,14 +1209,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         SizedBox(height: 16),
                         Text(
-                          '欢迎使用轻合记账应用。本协议为您与轻合记账应用之间的法律协议，规定了您使用我们服务的条款。请仔细阅读。\n\n'
-                          '1. 接受条款\n通过使用轻合记账应用，您同意接受本协议的所有条款。如果您不同意这些条款，请不要使用本应用。\n\n'
-                          '2. 账户\n您需要创建账户才能使用本应用的某些功能。您有责任维护您的账户安全性，并对您账户下发生的所有活动负责。\n\n'
-                          '3. 使用规定\n您同意不会使用本应用从事任何非法或未经授权的活动。\n\n'
-                          '4. 内容和版权\n轻合记账应用及其内容受版权法保护。未经许可，您不得复制、修改、分发或销售本应用的任何部分。\n\n'
-                          '5. 免责声明\n本应用按"现状"提供，没有任何形式的保证。我们不对使用本应用所产生的结果负责。\n\n'
-                          '6. 修改\n我们可能随时修改本协议。继续使用本应用即表示您接受修改后的条款。\n\n'
-                          '7. 终止\n如果您违反本协议，我们有权终止您的账户和对本应用的访问。',
+                          '欢迎使用青禾记账应用。本协议为您与青禾记账应用之间的法律协议，规定了您使用我们服务的条款。请仔细阅读。\n\n'
+                          '1. 协议接受\n使用青禾记账应用即表示您同意本协议的所有条款。如您不同意本协议的任何内容，请停止使用本应用。\n\n'
+                          '2. 账户管理\n您需要创建账户才能使用本应用的云同步等功能。您有责任：(1)保障账户安全；(2)及时更新账户信息；(3)对账户下所有活动负责。如发现任何未授权使用，请立即通知我们。\n\n'
+                          '3. 使用规范\n您同意：(1)不从事任何违法或未授权的活动；(2)不干扰或损害应用服务；(3)不上传包含病毒或恶意代码的内容；(4)不尝试获取其他用户的账户信息。\n\n'
+                          '4. 数据与隐私\n我们重视您的数据安全。我们会按照隐私政策收集和处理您的个人信息。您同意我们在提供服务过程中使用您的相关数据。\n\n'
+                          '5. 知识产权\n青禾记账应用及其内容（包括但不限于文本、图形、标识、按钮图标等）均受版权法保护。未经授权，您不得复制、修改、分发或创建衍生作品。\n\n'
+                          '6. 免责声明\n本应用按"现状"提供，我们不保证服务不会中断或无错误。在法律允许的最大范围内，我们不对任何直接、间接、附带或后果性的损害承担责任。\n\n'
+                          '7. 协议变更\n我们可能随时修改本协议。修改后的协议将在应用内公布，继续使用本应用即视为接受修改后的条款。\n\n'
+                          '8. 协议终止\n如您违反本协议，我们有权终止您的账户和访问权限。您也可以随时停止使用本应用或注销账户。\n\n'
+                          '9. 适用法律\n本协议适用中华人民共和国法律。协议履行过程中的任何争议，双方应友好协商；协商不成的，任何一方均有权向有管辖权的人民法院提起诉讼。',
                           style: TextStyle(fontSize: 14),
                         ),
                       ],
@@ -1182,13 +1264,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         SizedBox(height: 16),
                         Text(
                           '我们重视您的隐私。本隐私政策描述了我们如何收集、使用和保护您的个人信息。\n\n'
-                          '1. 信息收集\n我们可能收集您在使用轻合记账应用过程中提供的个人信息，如姓名、电子邮件地址等。我们还可能自动收集某些信息，如设备信息、使用数据等。\n\n'
-                          '2. 信息使用\n我们使用收集的信息来提供、维护和改进我们的服务，以及开发新服务。\n\n'
-                          '3. 信息共享\n我们不会出售您的个人信息。我们可能在以下情况下共享您的信息：经您同意、遵守法律要求、保护我们的权利或防止欺诈。\n\n'
-                          '4. 数据安全\n我们采取合理措施来保护您的个人信息，防止未经授权的访问、使用或披露。\n\n'
-                          '5. 数据保留\n我们会在必要的时间内保留您的个人信息，以实现本隐私政策中描述的目的，除非法律要求或允许更长的保留期。\n\n'
-                          '6. 您的权利\n您有权访问、更正或删除您的个人信息。您还可以反对或限制某些处理，或请求数据可携带性。\n\n'
-                          '7. 变更\n我们可能会更新本隐私政策。我们会通过在应用中发布新版本来通知您任何变更。',
+                          '1. 信息收集\n青禾记账会收集以下信息：(1)账户信息：注册时提供的用户名、邮箱等；(2)交易数据：您记录的账目信息；(3)设备信息：设备型号、操作系统版本、应用版本等；(4)使用数据：功能使用频率、操作行为等。上述信息将用于提供和改进服务。\n\n'
+                          '2. 信息存储\n您的数据主要存储在设备本地。启用云同步后，数据会加密传输并存储在我们的服务器上。我们采取行业标准的安全措施保护您的数据。\n\n'
+                          '3. 信息使用\n我们使用收集的信息：(1)提供、维护和改进应用服务；(2)开发新功能；(3)提供个性化使用体验；(4)发送服务通知；(5)防止欺诈和滥用行为；(6)进行匿名统计分析。\n\n'
+                          '4. 信息共享\n除以下情况外，我们不会与第三方共享您的个人信息：(1)获得您的明确同意；(2)与我们的服务提供商共享以完成服务；(3)法律要求或政府机构依法提出请求；(4)保护我们或用户的合法权益。\n\n'
+                          '5. 数据安全\n我们实施多种安全措施保护您的个人信息，包括加密传输、访问控制、定期安全评估等。但请注意，互联网环境并非绝对安全，我们会尽力保护您的个人信息，但无法保证其绝对安全。\n\n'
+                          '6. 数据保留\n我们会在实现本隐私政策所述目的所必需的时间内保留您的个人信息。您注销账户后，我们将根据相关法律法规要求保留必要信息，其余信息将被删除或匿名化处理。\n\n'
+                          '7. 儿童隐私\n本应用不面向13岁以下儿童。如发现错误收集了儿童个人信息，我们将采取措施尽快删除相关数据。\n\n'
+                          '8. 您的权利\n您有权访问、更正、删除您的个人信息，或限制个人信息处理。如需行使这些权利，请通过应用内"设置-反馈"联系我们。\n\n'
+                          '9. 政策更新\n我们可能会不时更新本隐私政策。更新后的政策将在应用内发布，并标明更新日期。建议您定期查阅本政策。\n\n'
+                          '10. 联系我们\n如对本隐私政策有任何疑问，请通过应用内"设置-反馈"或发送邮件至privacy@qinghe.com与我们联系。',
                           style: TextStyle(fontSize: 14),
                         ),
                       ],

@@ -9,7 +9,7 @@ import '../providers/transaction_provider.dart'; // 添加导入TransactionProvi
 import '../providers/theme_provider.dart'; // 添加导入ThemeProvider
 import 'account_detail_screen.dart'; // 导入账户详情页面
 import 'package:flutter/cupertino.dart'; // 需要 Cupertino 图标
-import '../widgets/common/toast_message.dart';
+import '../utils/toast_message.dart';
 
 class AccountScreen extends StatefulWidget {
   const AccountScreen({super.key});

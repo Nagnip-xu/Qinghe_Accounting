@@ -10,7 +10,8 @@ import '../providers/transaction_provider.dart';
 import '../providers/category_provider.dart';
 import '../constants/colors.dart';
 import '../utils/formatter.dart';
-import '../widgets/common/toast_message.dart';
+import '../utils/toast_message.dart';
+import '../services/data_sync_service.dart';
 
 class TransactionDetailScreen extends StatefulWidget {
   final Transaction transaction;
@@ -167,7 +168,11 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
       final success = await Provider.of<TransactionProvider>(
         context,
         listen: false,
-      ).updateTransaction(updatedTransaction, context: context);
+      ).updateTransaction(
+        widget.transaction,
+        updatedTransaction,
+        context: context,
+      );
 
       if (success) {
         // 退出编辑模式并显示成功消息
@@ -175,6 +180,12 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
           _isEditMode = false;
           _isLoading = false;
         });
+
+        // 使用DataSyncService进行全面数据同步，确保总资产和收支数据正确刷新
+        final dataSync = DataSyncService();
+        if (context.mounted) {
+          await dataSync.syncTransactionRelatedData(context);
+        }
 
         ToastMessage.show(
           context,

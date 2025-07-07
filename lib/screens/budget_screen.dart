@@ -8,6 +8,7 @@ import '../providers/category_provider.dart';
 import '../models/budget.dart';
 import '../utils/date_util.dart';
 import '../utils/formatter.dart';
+import '../screens/feature_documentation_screen.dart';
 
 class BudgetScreen extends StatefulWidget {
   const BudgetScreen({super.key});
@@ -100,16 +101,36 @@ class _BudgetScreenState extends State<BudgetScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      '分类预算',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color:
-                            isDarkMode
-                                ? AppColors.darkTextPrimary
-                                : AppColors.textPrimary,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          '分类预算',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color:
+                                isDarkMode
+                                    ? AppColors.darkTextPrimary
+                                    : AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => _showDocumentation(context),
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withOpacity(0.1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.help_outline,
+                              size: 16,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     TextButton.icon(
                       onPressed: _showAddBudgetDialog,
@@ -663,6 +684,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
                     period: 'monthly',
                     color: '',
                     icon: 'wallet',
+                    month: _currentMonth,
                   );
 
                   if (budgetProvider.monthlyBudget == null) {
@@ -689,7 +711,12 @@ class _BudgetScreenState extends State<BudgetScreen> {
     final TextEditingController amountController = TextEditingController();
     final budgetProvider = Provider.of<BudgetProvider>(context, listen: false);
 
-    final categoryId = categoryUsage['categoryId'] as int;
+    // 修复类型转换问题，使用安全的方式处理categoryId
+    final categoryId =
+        categoryUsage['categoryId'] is int
+            ? categoryUsage['categoryId']
+            : int.tryParse(categoryUsage['categoryId'].toString()) ?? 0;
+
     final categoryName = categoryUsage['categoryName'] as String;
     final categoryIcon = categoryUsage['categoryIcon'] as String;
     final categoryColor = categoryUsage['categoryColor'] as String?;
@@ -772,6 +799,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
                     period: 'monthly',
                     color: categoryColor ?? '',
                     icon: categoryIcon,
+                    month: _currentMonth,
                   );
 
                   budgetProvider.updateBudget(budget);
@@ -945,6 +973,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
                         period: 'monthly',
                         color: category.color,
                         icon: category.icon,
+                        month: _currentMonth,
                       );
 
                       // 添加预算
@@ -987,6 +1016,17 @@ class _BudgetScreenState extends State<BudgetScreen> {
           },
         );
       },
+    );
+  }
+
+  void _showDocumentation(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder:
+            (context) =>
+                const FeatureDocumentationScreen(featureId: 'category_budget'),
+      ),
     );
   }
 }

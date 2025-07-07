@@ -69,11 +69,21 @@ class DateUtil {
   }
 
   // 格式化月份显示 yyyy年MM月
-  static String formatMonthForDisplay(String yyyyMM) {
-    if (yyyyMM.length < 6) return '格式错误';
-    final year = yyyyMM.substring(0, 4);
-    final month = yyyyMM.substring(4, 6);
-    return '$year年$month月';
+  static String formatMonthForDisplay(String yearMonth) {
+    if (yearMonth.contains('-')) {
+      final parts = yearMonth.split('-');
+      if (parts.length >= 2) {
+        return '${parts[0]}年${parts[1]}月';
+      }
+    }
+
+    if (yearMonth.length >= 6) {
+      final year = yearMonth.substring(0, 4);
+      final month = yearMonth.substring(4, 6);
+      return '$year年$month月';
+    }
+
+    return '格式错误';
   }
 
   // 获取今日日期显示，用于交易记录

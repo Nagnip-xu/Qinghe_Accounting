@@ -4,7 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
+import '../l10n/app_localizations.dart';
 import '../constants/colors.dart';
 import '../providers/transaction_provider.dart';
 import '../screens/budget_screen.dart';
@@ -14,13 +14,17 @@ import '../providers/language_provider.dart';
 import '../providers/user_provider.dart';
 import '../models/user.dart';
 import '../screens/login_screen.dart';
-import '../widgets/common/toast_message.dart';
+import '../utils/toast_message.dart';
 import 'package:flutter/foundation.dart'; // 添加kDebugMode的引用
 import '../services/backup_service.dart'; // 添加BackupService
 // 添加BackupSelectionDialog
 import '../screens/financial_goals_screen.dart';
 import '../providers/reminder_provider.dart';
 import '../widgets/bill_reminder_dialog.dart';
+import '../screens/settings_screen.dart'; // 添加设置页面的导入
+import 'package:flutter/services.dart'; // 添加SystemNavigator的引用
+import 'package:shared_preferences/shared_preferences.dart'; // 添加SharedPreferences的引用
+import '../screens/feature_documentation_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -72,8 +76,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         color: Theme.of(context).iconTheme.color,
                       ),
                       onPressed: () {
-                        // 直接显示设置对话框，而不是跳转到设置页面
-                        _showSettingsDialog();
+                        // 跳转到设置页面
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const SettingsScreen(),
+                          ),
+                        );
                       },
                     ),
                   ],
@@ -157,6 +166,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   onTap: () => _showLanguageSettingsDialog(),
                 ),
                 _FeatureItem(
+                  icon: Icons.help_outline,
+                  title: '帮助文档',
+                  onTap: () => _showDocumentationHome(context),
+                ),
+                _FeatureItem(
                   icon: Icons.info_outline,
                   title: l10n.aboutApp ?? '关于应用',
                   onTap: () => _showAboutDialog(context),
@@ -171,7 +185,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   child: Column(
                     children: [
                       Text(
-                        '轻合记账 v1.0.0',
+                        '青禾记账 v1.0.0',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
@@ -578,6 +592,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     // 检查通知权限
     if (!reminderProvider.hasPermission) {
+      // 首次使用时显示通知权限说明
+      final firstUse = await _isFirstTimeUsingReminders();
+
+      if (firstUse) {
+        // 显示功能介绍对话框，解释权限用途
+        final proceedWithRequest = await _showReminderIntroductionDialog();
+        if (!proceedWithRequest) {
+          // 用户选择不继续
+          return;
+        }
+      }
+
       // 需要先请求权限
       final granted = await _showPermissionRequestDialog(reminderProvider);
       if (!granted) {
@@ -602,6 +628,69 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  // 检查是否首次使用提醒功能
+  Future<bool> _isFirstTimeUsingReminders() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final firstUse = prefs.getBool('first_time_reminders') ?? true;
+
+      if (firstUse) {
+        // 标记为非首次使用
+        await prefs.setBool('first_time_reminders', false);
+      }
+
+      return firstUse;
+    } catch (e) {
+      print('检查首次使用状态出错: $e');
+      return false;
+    }
+  }
+
+  // 显示提醒功能介绍对话框
+  Future<bool> _showReminderIntroductionDialog() async {
+    return await showDialog<bool>(
+          context: context,
+          builder:
+              (context) => AlertDialog(
+                title: Row(
+                  children: [
+                    Icon(
+                      Icons.notifications_active,
+                      color: Theme.of(context).primaryColor,
+                    ),
+                    const SizedBox(width: 10),
+                    const Text('账单提醒功能'),
+                  ],
+                ),
+                content: const Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('青禾记账支持账单到期提醒功能，可以在账单到期前提醒您及时付款。'),
+                    SizedBox(height: 16),
+                    Text('此功能需要发送通知到您的设备，需要您授予通知权限。'),
+                    SizedBox(height: 8),
+                    Text('您可以随时在应用设置中管理通知权限。'),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('暂不使用'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Theme.of(context).primaryColor,
+                    ),
+                    child: const Text('继续'),
+                  ),
+                ],
+              ),
+        ) ??
+        false;
+  }
+
   // 显示权限请求对话框
   Future<bool> _showPermissionRequestDialog(ReminderProvider provider) async {
     // 显示对话框
@@ -615,9 +704,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('轻合记账需要通知权限来发送账单提醒'),
+                    Text('青禾记账需要通知权限来发送账单提醒'),
                     SizedBox(height: 12),
                     Text('请在接下来的系统对话框中点击"允许"以启用通知'),
+                    SizedBox(height: 8),
+                    Text(
+                      '注意：如果您点击"拒绝"，将无法收到账单到期提醒',
+                      style: TextStyle(color: Colors.red, fontSize: 12),
+                    ),
                   ],
                 ),
                 actions: [
@@ -625,8 +719,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     onPressed: () => Navigator.pop(context, false),
                     child: const Text('取消'),
                   ),
-                  TextButton(
+                  ElevatedButton(
                     onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                    ),
                     child: const Text('继续'),
                   ),
                 ],
@@ -639,7 +736,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     // 请求权限
-    return await provider.requestNotificationPermission();
+    try {
+      // 显示请求中对话框
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder:
+            (context) => const AlertDialog(
+              title: Text('请求通知权限'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('正在请求权限，请稍候...'),
+                  SizedBox(height: 8),
+                  Text('请允许系统权限请求以启用提醒功能', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+            ),
+      );
+
+      // 请求权限
+      final result = await provider.requestNotificationPermission();
+
+      // 关闭对话框
+      Navigator.of(context).pop();
+
+      if (result) {
+        ToastMessage.show(
+          context,
+          '通知权限已授予，您将收到账单到期提醒',
+          icon: Icons.check_circle_outline,
+          backgroundColor: Colors.green.withOpacity(0.9),
+        );
+      }
+
+      return result;
+    } catch (e) {
+      // 关闭进度对话框（如果存在）
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+
+      print('请求权限出错: $e');
+      return false;
+    }
   }
 
   // 数据备份
@@ -655,6 +797,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
         );
         return;
       }
+
+      // 添加确认对话框
+      final bool confirmBackup =
+          await showDialog<bool>(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: const Text('确认备份'),
+                  content: const Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('确定要立即备份您的数据吗？'),
+                      SizedBox(height: 12),
+                      Text(
+                        '备份将保存您的所有账户、交易和设置数据。',
+                        style: TextStyle(fontSize: 14, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('取消'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('确认备份'),
+                    ),
+                  ],
+                ),
+          ) ??
+          false;
+
+      // 如果用户取消，则不执行备份
+      if (!confirmBackup) return;
 
       // 显示备份中对话框
       showDialog(
@@ -688,6 +866,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // 备份成功后关闭进度对话框
       if (mounted) Navigator.pop(context);
 
+      // 获取最新的备份时间
+      final lastBackup = await BackupService.getLastBackupTime();
+      String backupTimeString = "刚刚";
+
+      if (lastBackup != null) {
+        final now = DateTime.now();
+        final difference = now.difference(lastBackup);
+
+        if (difference.inDays > 0) {
+          backupTimeString = '${difference.inDays}天前';
+        } else if (difference.inHours > 0) {
+          backupTimeString = '${difference.inHours}小时前';
+        } else if (difference.inMinutes > 0) {
+          backupTimeString = '${difference.inMinutes}分钟前';
+        } else {
+          backupTimeString = '刚刚';
+        }
+      }
+
       // 显示备份成功对话框
       if (mounted) {
         // 显示备份成功对话框
@@ -707,9 +904,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     Text(
                       '备份时间: ${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())}',
                     ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '上次备份时间: $backupTimeString',
+                      style: const TextStyle(fontSize: 13, color: Colors.grey),
+                    ),
                     const SizedBox(height: 12),
                     const Text(
-                      '您可以在手机文件管理器中的"下载/轻合记账/备份"文件夹找到备份文件',
+                      '您可以在手机文件管理器中的"下载/青禾记账/备份"文件夹找到备份文件',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 13,
@@ -729,7 +931,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         Navigator.pop(context);
                         ToastMessage.show(
                           context,
-                          '备份文件位于手机下载目录中的"轻合记账/备份"文件夹',
+                          '备份文件位于手机下载目录中的"青禾记账/备份"文件夹',
                           icon: Icons.folder_open,
                           backgroundColor: Colors.blue.withOpacity(0.9),
                         );
@@ -881,6 +1083,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               // 显示恢复成功对话框
               showDialog(
                 context: context,
+                barrierDismissible: false, // 防止用户点击外部关闭
                 builder:
                     (BuildContext context) => AlertDialog(
                       title: const Text('恢复成功'),
@@ -895,32 +1098,59 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ),
                           const SizedBox(height: 16),
                           const Text(
-                            '需要重启应用以加载恢复的数据',
+                            '⚠️ 重要提示 ⚠️',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               color: Colors.red,
+                              fontSize: 16,
                             ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '您必须完全退出并重新启动应用才能看到恢复的数据。请按照以下步骤操作：',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '1. 点击"退出应用"按钮\n'
+                            '2. 从最近任务中移除本应用\n'
+                            '3. 重新打开应用',
+                            style: TextStyle(color: Colors.black87),
                           ),
                         ],
                       ),
                       actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('确定'),
-                        ),
                         TextButton(
                           onPressed: () {
                             // 提示用户手动退出应用
                             Navigator.pop(context);
                             ToastMessage.show(
                               context,
-                              '请手动关闭并重新打开应用',
+                              '请完全退出并重新打开应用以加载恢复的数据',
                               icon: Icons.exit_to_app,
                               backgroundColor: Colors.blue.withOpacity(0.9),
                             );
                           },
+                          child: const Text('稍后退出'),
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            // 退出应用
+                            Navigator.pop(context);
+                            ToastMessage.show(
+                              context,
+                              '请完全关闭并重新打开应用以加载恢复的数据',
+                              icon: Icons.exit_to_app,
+                              backgroundColor: Colors.red.withOpacity(0.9),
+                            );
+                            // 如果是 Android，可以使用 SystemNavigator.pop()
+                            if (Platform.isAndroid) {
+                              SystemNavigator.pop();
+                            }
+                          },
                           style: TextButton.styleFrom(
-                            foregroundColor: Colors.red,
+                            foregroundColor: Colors.white,
+                            backgroundColor: Colors.red,
                           ),
                           child: const Text('退出应用'),
                         ),
@@ -968,7 +1198,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (Platform.isAndroid) {
         // 简化权限检查，避免使用permission_handler插件
         // 直接尝试创建目录，如果可以创建则表示有权限
-        final directory = Directory('/storage/emulated/0/Download/轻合记账');
+        final directory = Directory('/storage/emulated/0/Download/青禾记账');
         try {
           if (!await directory.exists()) {
             await directory.create(recursive: true);
@@ -985,7 +1215,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             builder:
                 (context) => AlertDialog(
                   title: const Text('需要存储权限'),
-                  content: const Text('请到设置中授予轻合记账读写存储的权限，以便进行数据备份和导出。'),
+                  content: const Text('请到设置中授予青禾记账读写存储的权限，以便进行数据备份和导出。'),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.of(context).pop(),
@@ -1012,7 +1242,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       // 确保目录存在
       if (Platform.isAndroid) {
-        final directory = Directory('/storage/emulated/0/Download/轻合记账/导出报表');
+        final directory = Directory('/storage/emulated/0/Download/青禾记账/导出报表');
         if (!await directory.exists()) {
           await directory.create(recursive: true);
         }
@@ -1224,7 +1454,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // 添加文件标题和基本信息
       if (exportFormat == 'csv') {
         // CSV格式
-        content.writeln('# 轻合记账 - 交易记录导出');
+        content.writeln('# 青禾记账 - 交易记录导出');
         content.writeln(
           '# 导出时间: ${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())}',
         );
@@ -1303,7 +1533,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         }
       } else {
         // 文本格式（更易读）
-        content.writeln('======= 轻合记账 - 交易记录导出 =======');
+        content.writeln('======= 青禾记账 - 交易记录导出 =======');
         content.writeln('');
         content.writeln(
           '导出时间: ${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())}',
@@ -1551,7 +1781,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         // 显示提示
         ToastMessage.show(
           context,
-          '数据已成功导出到手机下载目录：\n"下载/轻合记账/导出报表"文件夹',
+          '数据已成功导出到手机下载目录：\n"下载/青禾记账/导出报表"文件夹',
           icon: Icons.file_download_done,
           backgroundColor: Colors.green.withOpacity(0.9),
         );
@@ -1876,12 +2106,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
       context: context,
       builder:
           (context) => AlertDialog(
-            title: const Text('关于轻合记账'),
+            title: const Text('关于青禾记账'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('轻合记账是一款简单易用的个人记账应用。'),
+                const Text('青禾记账是一款简单易用的个人记账应用。'),
                 const SizedBox(height: 8),
                 const Text('版本: 1.0.0'),
                 const SizedBox(height: 8),
@@ -1936,7 +2166,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           (context) => StatefulBuilder(
             builder: (context, setState) {
               return AlertDialog(
-                title: const Text('为轻合记账评分'),
+                title: const Text('为青禾记账评分'),
                 content: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -2025,56 +2255,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // 显示设置对话框，包含退出登录选项
+  // 设置对话框方法保留但不再使用
   void _showSettingsDialog() {
     final userProvider = Provider.of<UserProvider>(context);
     final bool isLoggedIn = userProvider.isLoggedIn;
     final l10n = AppLocalizations.of(context);
 
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: Text(l10n.settings ?? '设置'),
-            content: SingleChildScrollView(
-              child: ListBody(
-                children: [
-                  if (isLoggedIn)
-                    ListTile(
-                      leading: const Icon(Icons.exit_to_app, color: Colors.red),
-                      title: Text(
-                        l10n.logout ?? '退出登录',
-                        style: const TextStyle(color: Colors.red),
-                      ),
-                      onTap: () {
-                        Navigator.pop(context);
-                        _showLogoutDialog(userProvider);
-                      },
-                    ),
-                  if (!isLoggedIn)
-                    ListTile(
-                      leading: const Icon(Icons.login),
-                      title: Text(l10n.login ?? '登录'),
-                      onTap: () {
-                        Navigator.pop(context);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const LoginScreen(),
-                          ),
-                        );
-                      },
-                    ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text(l10n.cancel ?? '取消'),
-              ),
-            ],
-          ),
+    // 直接跳转到设置页面
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const SettingsScreen()),
     );
   }
 
@@ -2109,6 +2299,182 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ],
           ),
+    );
+  }
+
+  void _showDocumentationHome(BuildContext context) {
+    // 显示文档类别选择对话框
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _buildDocumentationSheet(),
+    );
+  }
+
+  Widget _buildDocumentationSheet() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDarkMode ? AppColors.darkCard : Colors.white,
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(20),
+          topRight: Radius.circular(20),
+        ),
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '帮助文档',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color:
+                      isDarkMode
+                          ? AppColors.darkTextPrimary
+                          : AppColors.textPrimary,
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(context),
+                color:
+                    isDarkMode
+                        ? AppColors.darkTextSecondary
+                        : AppColors.textSecondary,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  _buildDocumentItem(
+                    title: '记账功能',
+                    description: '了解如何使用各种方式快速记录您的收支',
+                    icon: Icons.edit_note,
+                    featureId: 'transaction_entry',
+                  ),
+                  _buildDocumentItem(
+                    title: '统计分析',
+                    description: '查看如何使用图表和数据分析您的财务状况',
+                    icon: Icons.bar_chart,
+                    featureId: 'statistics_analysis',
+                  ),
+                  _buildDocumentItem(
+                    title: '分类预算',
+                    description: '了解如何设置和管理不同支出类别的预算',
+                    icon: Icons.category,
+                    featureId: 'category_budget',
+                  ),
+                  _buildDocumentItem(
+                    title: '月度预算',
+                    description: '了解如何设置和管理月度总预算',
+                    icon: Icons.account_balance_wallet,
+                    featureId: 'monthly_budget',
+                  ),
+                  _buildDocumentItem(
+                    title: '周期账单',
+                    description: '设置自动重复的账单，如房租、订阅费等',
+                    icon: Icons.repeat,
+                    featureId: 'bill_recurring',
+                  ),
+                  _buildDocumentItem(
+                    title: '云同步',
+                    description: '了解如何在多设备间同步您的账单数据',
+                    icon: Icons.cloud_sync,
+                    featureId: 'cloud_sync',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDocumentItem({
+    required String title,
+    required String description,
+    required IconData icon,
+    required String featureId,
+  }) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
+    return InkWell(
+      onTap: () {
+        Navigator.pop(context); // 关闭底部菜单
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder:
+                (context) => FeatureDocumentationScreen(featureId: featureId),
+          ),
+        );
+      },
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: AppColors.primary, size: 24),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                      color:
+                          isDarkMode
+                              ? AppColors.darkTextPrimary
+                              : AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    description,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color:
+                          isDarkMode
+                              ? AppColors.darkTextSecondary
+                              : AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios,
+              size: 16,
+              color:
+                  isDarkMode
+                      ? AppColors.darkTextSecondary
+                      : AppColors.textSecondary,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

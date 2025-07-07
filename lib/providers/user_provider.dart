@@ -20,6 +20,9 @@ class UserProvider with ChangeNotifier {
 
     try {
       _currentUser = await _userService.getCurrentUser();
+      print(
+        '初始化用户信息: ${_currentUser.username}, 登录状态: ${_currentUser.isLoggedIn}',
+      );
       _setError(null);
     } catch (e) {
       _setError('获取用户信息失败: $e');
@@ -45,6 +48,11 @@ class UserProvider with ChangeNotifier {
         );
 
         _currentUser = user;
+
+        // 保存用户信息到本地存储
+        await _userService.updateUser(user);
+        print('用户登录成功，已保存用户信息: ${user.username}');
+
         _setError(null);
         return true;
       } else {

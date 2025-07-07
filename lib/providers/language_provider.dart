@@ -31,7 +31,7 @@ class LanguageProvider with ChangeNotifier {
       'operationSuccess': 'Operation Successful',
     },
     'zh': {
-      'appTitle': '轻合记账',
+      'appTitle': '青禾记账',
       'home': '首页',
       'statistics': '统计',
       'account': '账户',

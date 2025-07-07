@@ -32,35 +32,36 @@ class Transaction {
   });
 
   Map<String, dynamic> toMap() {
+    // 确保类型转换函数
+    int? toInt(dynamic value) {
+      if (value == null) return null;
+      if (value is int) return value;
+      if (value is String) return int.tryParse(value);
+      return null;
+    }
+
     // 移除id字段如果为null，让数据库自动生成
     final map = {
       'type': type,
       'amount': amount,
-      'categoryId':
-          categoryId is String
-              ? int.tryParse(categoryId) ?? 0
-              : categoryId, // 确保转换为整数
+      'categoryId': toInt(categoryId) ?? 0,
       'categoryName': categoryName,
       'categoryIcon':
           categoryIcon.isEmpty ? 'default' : categoryIcon, // 确保icon字段不为空
       'categoryColor': categoryColor ?? '',
-      'accountId':
-          accountId is String
-              ? int.tryParse(accountId) ?? 0
-              : accountId, // 确保转换为整数
+      'accountId': toInt(accountId) ?? 0,
       'accountName': accountName,
       'date': DateFormat('yyyy-MM-dd HH:mm:ss').format(date),
       'note': note ?? '',
+      'toAccountId': null, // 默认为null，后面会根据需要修改
     };
 
     // 如果是转账交易，添加目标账户ID信息
     if (type == '转账' && toAccountId != null) {
-      map['toAccountId'] =
-          toAccountId is String ? int.tryParse(toAccountId) ?? 0 : toAccountId;
-      // 不添加toAccountName字段，因为数据库表中不存在这个列
-    } else {
-      // 如果不是转账交易，确保toAccountId字段为null
-      map['toAccountId'] = null;
+      final intToAccountId = toInt(toAccountId);
+      if (intToAccountId != null) {
+        map['toAccountId'] = intToAccountId;
+      }
     }
 
     // 如果id不为null，才添加id字段
@@ -79,22 +80,41 @@ class Transaction {
         try {
           return DateFormat('yyyy-MM-dd HH:mm').parse(dateStr);
         } catch (e) {
-          return DateTime.now(); // 如果无法解析，返回当前时间
+          try {
+            return DateTime.parse(dateStr);
+          } catch (e) {
+            return DateTime.now(); // 如果无法解析，返回当前时间
+          }
         }
       }
     }
 
+    // 确保所有字段都有合适的类型转换
+    double parseAmount(dynamic value) {
+      if (value is double) return value;
+      if (value is int) return value.toDouble();
+      if (value is String) return double.tryParse(value) ?? 0.0;
+      return 0.0;
+    }
+
+    // 处理日期字段
+    final dateValue = map['date'];
+    final DateTime date =
+        dateValue is String
+            ? parseDateTime(dateValue)
+            : (dateValue is DateTime ? dateValue : DateTime.now());
+
     return Transaction(
       id: map['id'],
-      type: map['type'],
-      amount: map['amount'],
-      categoryId: map['categoryId'],
-      categoryName: map['categoryName'],
-      categoryIcon: map['categoryIcon'],
+      type: map['type'] ?? '支出', // 提供默认值
+      amount: parseAmount(map['amount']),
+      categoryId: map['categoryId'] ?? 0,
+      categoryName: map['categoryName'] ?? '未分类',
+      categoryIcon: map['categoryIcon'] ?? 'default',
       categoryColor: map['categoryColor'],
-      accountId: map['accountId'],
-      accountName: map['accountName'],
-      date: parseDateTime(map['date']),
+      accountId: map['accountId'] ?? 0,
+      accountName: map['accountName'] ?? '',
+      date: date,
       note: map['note'],
       toAccountId: map['toAccountId'],
       toAccountName: null, // 数据库中不存在该字段，需要在显示时通过toAccountId查询

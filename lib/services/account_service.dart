@@ -122,9 +122,19 @@ class AccountService {
           // 遍历所有交易，根据类型计算余额
           for (var tx in allTransactions) {
             final String type = tx['type'];
-            final double amount = tx['amount']; // amount 现在可能是负数（对于调整）
-            final int? txAccountId = tx['accountId'];
-            final int? txToAccountId = tx['toAccountId'];
+            final double amount =
+                tx['amount'] is double
+                    ? tx['amount']
+                    : double.tryParse(tx['amount'].toString()) ??
+                        0.0; // 确保amount是double类型
+            final int? txAccountId =
+                tx['accountId'] is int
+                    ? tx['accountId']
+                    : int.tryParse(tx['accountId'].toString());
+            final int? txToAccountId =
+                tx['toAccountId'] is int
+                    ? tx['toAccountId']
+                    : int.tryParse(tx['toAccountId'].toString());
 
             if (type == '收入' && txAccountId == accountId) {
               calculatedBalance += amount;
@@ -152,14 +162,9 @@ class AccountService {
 
           double finalBalance = calculatedBalance;
 
-          // 如果是负债账户，余额符号反转（计算出的正数变负债，负数变资产? 逻辑确认）
-          // 负债账户逻辑：计算出的余额代表欠款额。如果 calculatedBalance 为正，说明净支出>净收入，即欠款，余额应为负。
-          // 如果 calculatedBalance 为负，说明净收入>净支出，即有盈余/还款，余额应为正。
-          if (account['isDebt'] == 1) {
-            // 对于负债账户，保持余额原始计算，不做反转，允许余额为负数
-            finalBalance = calculatedBalance;
-            print('  账户#$accountId 是负债账户，最终余额为: $finalBalance');
-          }
+          // 负债账户的余额处理逻辑保持不变
+          // 这里不需要对负债账户做特殊处理，让计算的余额保持原样
+          // 因为负债账户的余额就是其负债金额，负值表示负债
 
           print(
             '账户#$accountId 最终计算余额: $finalBalance (基于 ${allTransactions.length} 条交易)',

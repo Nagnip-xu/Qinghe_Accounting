@@ -3,13 +3,16 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../constants/colors.dart';
+import '../constants/category_icons.dart';
 import '../providers/theme_provider.dart';
 import '../widgets/month_year_picker.dart';
 import '../models/transaction.dart';
 import '../providers/transaction_provider.dart';
 import '../services/transaction_service.dart';
 import '../services/database_service.dart';
+import 'category_detail_screen.dart';
 
 class StatisticsScreen extends StatefulWidget {
   const StatisticsScreen({super.key});
@@ -95,48 +98,17 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   Future<void> _fetchDailyExpenses(String yearMonth) async {
     final Database db = await _databaseService.database;
 
-    // 获取该月天数和判断是否是大月
+    // 获取该月天数
     final lastDay = DateUtil.getLastDayOfMonth(_selectedDate);
-    final bool isCurrentMonthBig = DateUtil.isBigMonth(_selectedDate.month);
 
     // 清空原有数据
     _dailyExpenses = [];
 
-    // 创建分组列表
-    List<Map<String, dynamic>> groupedDays = [];
-
-    // 对于大月的31天，最后三天（29,30,31）作为一组
-    if (isCurrentMonthBig && lastDay == 31) {
-      // 1-28日按照2天一组
-      for (int i = 1; i <= 28; i += 2) {
-        int endDay = i + 1;
-        groupedDays.add({
-          'startDay': i,
-          'endDay': endDay,
-          'label': '$i-$endDay日',
-          'amount': 0.0,
-        });
-      }
-
-      // 29-31日为最后一组
-      groupedDays.add({
-        'startDay': 29,
-        'endDay': 31,
-        'label': '29-31日',
-        'amount': 0.0,
-      });
-    } else {
-      // 非31天的月份，正常每2天一组
-      for (int i = 1; i <= lastDay; i += 2) {
-        int endDay = i + 1 > lastDay ? lastDay : i + 1;
-        groupedDays.add({
-          'startDay': i,
-          'endDay': endDay,
-          'label': '$i-$endDay日',
-          'amount': 0.0,
-        });
-      }
-    }
+    // 按照每天记录准备数据点，后续在图表上展示时才显示5天间隔的标签
+    List<FlSpot> dailySpots = List.generate(lastDay, (index) {
+      // 创建初始每天的数据点，金额为0
+      return FlSpot((index + 1).toDouble(), 0);
+    });
 
     // 查询每日支出数据
     final dailyExpenseResult = await db.rawQuery('''
@@ -148,30 +120,22 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
       GROUP BY strftime('%d', date)
     ''');
 
-    // 将每日数据映射到对应的组
+    // 将查询结果映射到对应的日期
     for (var row in dailyExpenseResult) {
       if (row['day'] != null && row['total'] != null) {
         final day = int.parse(row['day'].toString());
-        final amount = double.parse(row['total'].toString());
-
-        // 找到该天所属的组
-        for (var group in groupedDays) {
-          if (day >= group['startDay'] && day <= group['endDay']) {
-            group['amount'] = (group['amount'] as double) + amount;
-            break;
-          }
+        if (day > 0 && day <= lastDay) {
+          final amount = double.parse(row['total'].toString());
+          // 数组索引从0开始，日期从1开始，所以要减1
+          dailySpots[day - 1] = FlSpot(day.toDouble(), amount);
         }
       }
     }
 
-    // 将分组数据转换为FlSpot列表用于图表
-    _dailyExpenses =
-        groupedDays.map((group) {
-          // 使用组的中间日期作为X轴坐标
-          double xPosition =
-              ((group['startDay'] as int) + (group['endDay'] as int)) / 2;
-          return FlSpot(xPosition, group['amount'] as double);
-        }).toList();
+    // 更新状态
+    setState(() {
+      _dailyExpenses = dailySpots;
+    });
   }
 
   // 获取支出分类明细
@@ -181,30 +145,28 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
     // 获取总支出金额
     double totalExpense = _totalExpense;
 
-    // 定义默认分类列表
-    final List<String> defaultCategories = ['餐饮', '交通', '购物', '娱乐', '账单', '其他'];
+    // 定义默认分类列表和颜色
+    final List<String> defaultCategories = [
+      '餐饮',
+      '交通',
+      '购物',
+      '娱乐',
+      '住房',
+      '医疗',
+      '教育',
+      '其他',
+    ];
 
-    // 默认图标和颜色映射
-    final Map<String, Map<String, dynamic>> defaultCategoryInfo = {
-      '餐饮': {'icon': 'restaurant', 'color': AppColors.foodColor},
-      '交通': {'icon': 'directions_car', 'color': AppColors.transportColor},
-      '购物': {'icon': 'shopping_bag', 'color': AppColors.shoppingColor},
-      '娱乐': {'icon': 'movie', 'color': AppColors.entertainmentColor},
-      '账单': {'icon': 'receipt_long', 'color': AppColors.billsColor},
-      '其他': {'icon': 'more_horiz', 'color': AppColors.otherColor},
-    };
-
-    // 如果没有支出，创建默认分类列表但金额为0
+    // 从数据库查询所有分类，未指定颜色时使用CategoryColors获取颜色
     if (totalExpense <= 0) {
       _categories =
           defaultCategories.map((categoryName) {
-            final info = defaultCategoryInfo[categoryName]!;
             return {
               'name': categoryName,
               'amount': 0.0,
               'percentage': 0.0,
-              'color': info['color'] as Color,
-              'icon': getIconByName(info['icon'] as String),
+              'color': CategoryColors.getColor(categoryName),
+              'icon': getIconByName(categoryName),
             };
           }).toList();
       return;
@@ -237,65 +199,27 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
       final total = double.parse(row['total'].toString());
       final percentage = (total / totalExpense * 100).toStringAsFixed(1);
 
-      // 解析颜色
-      Color color;
-      try {
-        if (categoryColor != null && categoryColor.isNotEmpty) {
-          if (categoryColor.startsWith('0x')) {
-            color = Color(int.parse(categoryColor));
-          } else {
-            color = Color(
-              int.parse('0xFF${categoryColor.replaceAll('#', '')}'),
-            );
-          }
-        } else if (defaultCategoryInfo.containsKey(categoryName)) {
-          // 使用默认颜色
-          color = defaultCategoryInfo[categoryName]!['color'] as Color;
-        } else {
-          color = AppColors.otherColor;
-        }
-      } catch (e) {
-        // 默认颜色
-        if (defaultCategoryInfo.containsKey(categoryName)) {
-          color = defaultCategoryInfo[categoryName]!['color'] as Color;
-        } else {
-          color = AppColors.otherColor;
-        }
-      }
-
-      // 解析图标
-      IconData icon;
-      try {
-        icon = getIconByName(categoryIcon);
-      } catch (e) {
-        if (defaultCategoryInfo.containsKey(categoryName)) {
-          icon = getIconByName(
-            defaultCategoryInfo[categoryName]!['icon'] as String,
-          );
-        } else {
-          icon = Icons.category;
-        }
-      }
+      // 解析颜色 - 始终使用CategoryColors获取颜色，确保与添加交易页面一致
+      Color color = CategoryColors.getColor(categoryName);
 
       allCategories.add({
         'name': categoryName,
         'amount': total,
         'percentage': double.parse(percentage),
         'color': color,
-        'icon': icon,
+        'icon': getIconByName(categoryIcon),
       });
     }
 
     // 添加默认分类中不在数据库结果中的分类（设置为0金额）
     for (String categoryName in defaultCategories) {
       if (!processedCategories.contains(categoryName)) {
-        final info = defaultCategoryInfo[categoryName]!;
         allCategories.add({
           'name': categoryName,
           'amount': 0.0,
           'percentage': 0.0,
-          'color': info['color'] as Color,
-          'icon': getIconByName(info['icon'] as String),
+          'color': CategoryColors.getColor(categoryName),
+          'icon': getIconByName(categoryName),
         });
       }
     }
@@ -311,47 +235,180 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   // 根据字符串获取对应的图标
   IconData getIconByName(String iconName) {
     switch (iconName) {
+      // 餐饮类
       case 'restaurant':
       case 'utensils':
       case 'food':
-        return Icons.restaurant;
+      case '餐饮':
+        return FontAwesomeIcons.utensils;
+      case 'bread-slice':
+      case '早餐':
+        return FontAwesomeIcons.breadSlice;
+      case 'bowl-food':
+      case '午餐':
+        return FontAwesomeIcons.bowlFood;
+      case 'bowl-rice':
+      case '晚餐':
+        return FontAwesomeIcons.bowlRice;
+      case 'candy-cane':
+      case '零食':
+        return FontAwesomeIcons.candyCane;
+
+      // 交通类
       case 'car':
       case 'directions_car':
+      case '交通':
+        return FontAwesomeIcons.car;
+      case 'taxi':
+      case '打车':
+        return FontAwesomeIcons.taxi;
       case 'bus':
+      case '公交':
+        return FontAwesomeIcons.bus;
+      case 'train-subway':
       case 'subway':
-      case 'train':
-        return Icons.directions_car;
-      case 'cart-shopping':
+      case '地铁':
+        return FontAwesomeIcons.trainSubway;
+
+      // 购物类
+      case 'bag-shopping':
       case 'shopping_bag':
       case 'shopping_cart':
       case 'shopping':
-        return Icons.shopping_bag;
-      case 'film':
+      case '购物':
+        return FontAwesomeIcons.bagShopping;
+      case 'shirt':
+      case '服装':
+        return FontAwesomeIcons.shirt;
+      case 'spray-can':
+      case '化妆':
+        return FontAwesomeIcons.sprayCan;
+      case 'laptop':
+      case '数码':
+        return FontAwesomeIcons.laptop;
+      case 'couch':
+      case '家居':
+        return FontAwesomeIcons.couch;
+
+      // 娱乐类
+      case 'gamepad':
       case 'movie':
       case 'entertainment':
       case 'videogame':
-        return Icons.movie;
-      case 'receipt':
-      case 'receipt_long':
-      case 'bill':
-      case 'invoice':
-        return Icons.receipt_long;
+      case '娱乐':
+        return FontAwesomeIcons.gamepad;
+      case 'film':
+      case '电影':
+        return FontAwesomeIcons.film;
+      case 'chess':
+      case '游戏':
+        return FontAwesomeIcons.chess;
+      case 'plane':
+      case '旅游':
+        return FontAwesomeIcons.plane;
+
+      // 住房类
+      case 'house':
+      case '住房':
+        return FontAwesomeIcons.house;
+      case 'house-chimney':
+      case '房租':
+        return FontAwesomeIcons.houseChimney;
+      case 'droplet':
+      case '水费':
+        return FontAwesomeIcons.droplet;
+      case 'bolt':
+      case '电费':
+        return FontAwesomeIcons.bolt;
+      case 'fire':
+      case '燃气费':
+        return FontAwesomeIcons.fire;
+      case 'wifi':
+      case '网费':
+        return FontAwesomeIcons.wifi;
+      case 'phone':
+      case '话费':
+        return FontAwesomeIcons.phone;
+
+      // 医疗类
       case 'medical':
       case 'health':
       case 'healing':
       case 'local_hospital':
-        return Icons.local_hospital;
+      case 'suitcase-medical':
+      case '医疗':
+        return FontAwesomeIcons.suitcaseMedical;
+      case 'pills':
+      case '药品':
+        return FontAwesomeIcons.pills;
+      case 'hospital-user':
+      case '挂号':
+        return FontAwesomeIcons.hospitalUser;
+
+      // 教育类
       case 'education':
       case 'school':
-      case 'book':
       case 'class':
-        return Icons.school;
+      case 'graduation-cap':
+      case '教育':
+        return FontAwesomeIcons.graduationCap;
+      case 'book':
+      case '学费':
+        return FontAwesomeIcons.book;
+      case 'book-open':
+      case '书籍':
+        return FontAwesomeIcons.bookOpen;
+
+      // 收入类
+      case 'money-bill-1':
+      case '工资':
+        return FontAwesomeIcons.moneyBill1;
+      case 'award':
+      case '奖金':
+        return FontAwesomeIcons.award;
+      case 'briefcase':
+      case '兼职':
+        return FontAwesomeIcons.briefcase;
+      case 'chart-line':
+      case '投资':
+        return FontAwesomeIcons.chartLine;
+
+      // 其他支出
+      case 'baby':
+      case '孩子':
+        return FontAwesomeIcons.baby;
+      case 'paw':
+      case '宠物':
+        return FontAwesomeIcons.paw;
+      case 'money-bill-trend-up':
+      case '理财':
+        return FontAwesomeIcons.moneyBillTrendUp;
+      case 'user-group':
+      case '社交':
+        return FontAwesomeIcons.userGroup;
+      case 'gift':
+      case '礼物':
+        return FontAwesomeIcons.gift;
+
+      // 账单类
+      case 'receipt':
+      case 'receipt_long':
+      case 'bill':
+      case 'invoice':
+        return FontAwesomeIcons.receipt;
+
+      // 其他
       case 'more':
       case 'more_horiz':
       case 'other':
-        return Icons.more_horiz;
+      case 'ellipsis':
+      case '其他':
+        return FontAwesomeIcons.ellipsis;
+      case 'tag':
+      case 'custom':
+        return FontAwesomeIcons.tag;
       default:
-        return Icons.category;
+        return FontAwesomeIcons.receipt;
     }
   }
 
@@ -573,11 +630,31 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   // 构建支出趋势卡片
   Widget _buildExpenseTrendCard() {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    final themeProvider = Provider.of<ThemeProvider>(context);
-    final themeColor = themeProvider.themeColor;
+    final expenseColor = AppColors.expense;
+
+    // 计算Y轴最大值
+    final yInterval = _calculateInterval();
+    final maxExpense =
+        _dailyExpenses.isEmpty
+            ? 0.0
+            : (_dailyExpenses
+                .map((spot) => spot.y)
+                .reduce((max, y) => max > y ? max : y));
+
+    // 确保Y轴最大值至少为300元，或者比最大支出多一个间隔
+    final maxY =
+        maxExpense > 300
+            ? ((maxExpense / yInterval).ceil() + 1) * yInterval
+            : 300.0;
+
+    // 获取当月天数
+    final lastDay = DateUtil.getLastDayOfMonth(_selectedDate);
+
+    // 固定的X轴标签位置
+    final List<int> fixedXLabels = [1, 5, 10, 15, 20, 25, lastDay];
 
     return Container(
-      padding: const EdgeInsets.all(16.0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
       decoration: BoxDecoration(
         color: isDarkMode ? AppColors.darkCard : Colors.white,
         borderRadius: BorderRadius.circular(16.0),
@@ -592,120 +669,277 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '每日支出曲线',
-            style: TextStyle(
-              fontWeight: FontWeight.w500,
-              fontSize: 14,
-              color:
-                  isDarkMode
-                      ? AppColors.darkTextSecondary
-                      : AppColors.textSecondary,
-            ),
+          // 标题和最大值显示
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '每日支出曲线',
+                style: TextStyle(
+                  fontWeight: FontWeight.w500,
+                  fontSize: 14,
+                  color:
+                      isDarkMode
+                          ? AppColors.darkTextSecondary
+                          : AppColors.textSecondary,
+                ),
+              ),
+              // 显示最大值
+              if (_dailyExpenses.isNotEmpty && maxExpense > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: expenseColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '最高: ¥${maxExpense.toStringAsFixed(0)}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w500,
+                      fontSize: 12,
+                      color: expenseColor,
+                    ),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 16),
-          SizedBox(
-            height: 180,
-            child: LineChart(
-              LineChartData(
-                gridData: FlGridData(
-                  show: true,
-                  drawVerticalLine: false,
-                  horizontalInterval: 500,
-                  getDrawingHorizontalLine: (value) {
-                    return FlLine(
-                      color: Colors.grey.withOpacity(0.1),
-                      strokeWidth: 1,
-                    );
-                  },
-                ),
-                titlesData: FlTitlesData(
-                  show: true,
-                  leftTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 30,
-                      getTitlesWidget: (value, meta) {
-                        if (value == 0) return const SizedBox.shrink();
-                        return Text(
-                          '${value.toInt()}',
-                          style: TextStyle(
+          Stack(
+            children: [
+              SizedBox(
+                height: 220,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: LineChart(
+                    LineChartData(
+                      lineTouchData: LineTouchData(
+                        enabled: true,
+                        touchTooltipData: LineTouchTooltipData(
+                          tooltipBgColor:
+                              isDarkMode ? Colors.grey[800]! : Colors.white,
+                          tooltipRoundedRadius: 8,
+                          tooltipPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          tooltipMargin: 8,
+                          getTooltipItems: (touchedSpots) {
+                            return touchedSpots.map((spot) {
+                              return LineTooltipItem(
+                                '${spot.x.toInt()}日: ¥${spot.y.toStringAsFixed(0)}',
+                                TextStyle(
+                                  color:
+                                      isDarkMode
+                                          ? Colors.white
+                                          : AppColors.textPrimary,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              );
+                            }).toList();
+                          },
+                        ),
+                        touchSpotThreshold: 20,
+                        handleBuiltInTouches: true,
+                      ),
+                      gridData: FlGridData(
+                        show: true,
+                        drawVerticalLine: false,
+                        horizontalInterval: 50, // 固定为50元间隔
+                        getDrawingHorizontalLine: (value) {
+                          return FlLine(
                             color:
                                 isDarkMode
-                                    ? AppColors.darkTextSecondary
-                                    : AppColors.textSecondary,
-                            fontSize: 10,
+                                    ? Colors.grey[700]!.withOpacity(0.3)
+                                    : Colors.grey[300]!,
+                            strokeWidth: 1,
+                            dashArray: [5, 5], // 虚线效果
+                          );
+                        },
+                      ),
+                      titlesData: FlTitlesData(
+                        show: true,
+                        leftTitles: AxisTitles(
+                          sideTitles: SideTitles(
+                            showTitles: true,
+                            reservedSize: 35,
+                            getTitlesWidget: (value, meta) {
+                              // 确保显示0, 50, 100, 150, 200, 250, 300
+                              // 超过300后，根据计算的间隔显示
+                              if (maxY <= 300) {
+                                // 300以内固定显示这些刻度
+                                if (value % 50 != 0 && value != 0) {
+                                  return const SizedBox.shrink();
+                                }
+                              } else {
+                                // 300以上使用计算的间隔
+                                if (value % yInterval != 0 && value != 0) {
+                                  return const SizedBox.shrink();
+                                }
+                              }
+
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: Text(
+                                  value.toInt().toString(),
+                                  style: TextStyle(
+                                    color:
+                                        isDarkMode
+                                            ? AppColors.darkTextSecondary
+                                            : AppColors.textSecondary,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              );
+                            },
+                            interval:
+                                maxY <= 300
+                                    ? 50
+                                    : yInterval, // 300以内用50间隔，超过300使用动态间隔
                           ),
-                        );
-                      },
-                      interval: _calculateInterval(),
-                    ),
-                  ),
-                  rightTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 30,
-                      getTitlesWidget: (value, meta) {
-                        if (value.toInt() % 5 != 0) {
-                          return const SizedBox.shrink();
-                        }
-                        return Text(
-                          '${value.toInt()}',
-                          style: TextStyle(
+                        ),
+                        rightTitles: const AxisTitles(
+                          sideTitles: SideTitles(showTitles: false),
+                        ),
+                        bottomTitles: AxisTitles(
+                          sideTitles: SideTitles(
+                            showTitles: true,
+                            reservedSize: 30,
+                            getTitlesWidget: (value, meta) {
+                              // 只在固定位置显示标签: 1,5,10,15,20,25,最后一天
+                              final day = value.toInt();
+                              if (!fixedXLabels.contains(day)) {
+                                return const SizedBox.shrink();
+                              }
+
+                              // 所有日期标签使用相同样式
+                              return Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Text(
+                                  day.toString(),
+                                  style: TextStyle(
+                                    color:
+                                        isDarkMode
+                                            ? AppColors.darkTextSecondary
+                                            : AppColors.textSecondary,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        topTitles: const AxisTitles(
+                          sideTitles: SideTitles(showTitles: false),
+                        ),
+                      ),
+                      borderData: FlBorderData(
+                        show: true,
+                        border: Border(
+                          left: BorderSide(
                             color:
                                 isDarkMode
-                                    ? AppColors.darkTextSecondary
-                                    : AppColors.textSecondary,
-                            fontSize: 10,
+                                    ? Colors.grey[700]!.withOpacity(0.5)
+                                    : Colors.grey[300]!,
+                            width: 1,
                           ),
-                        );
-                      },
-                    ),
-                  ),
-                  topTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                ),
-                borderData: FlBorderData(show: false),
-                lineBarsData: [
-                  LineChartBarData(
-                    spots: _dailyExpenses,
-                    isCurved: true,
-                    color: AppColors.expense, // 恢复使用支出颜色
-                    barWidth: 3,
-                    isStrokeCapRound: true,
-                    dotData: FlDotData(show: false),
-                    belowBarData: BarAreaData(
-                      show: true,
-                      color: AppColors.expense.withOpacity(0.2), // 恢复使用支出颜色
-                    ),
-                  ),
-                ],
-                lineTouchData: LineTouchData(
-                  touchTooltipData: LineTouchTooltipData(
-                    tooltipBgColor:
-                        isDarkMode ? Colors.grey[800]! : Colors.white,
-                    getTooltipItems: (touchedSpots) {
-                      return touchedSpots.map((spot) {
-                        return LineTooltipItem(
-                          '${spot.y.toStringAsFixed(0)}¥',
-                          TextStyle(
+                          bottom: BorderSide(
                             color:
                                 isDarkMode
-                                    ? Colors.white
-                                    : AppColors.textPrimary,
-                            fontWeight: FontWeight.bold,
+                                    ? Colors.grey[700]!.withOpacity(0.5)
+                                    : Colors.grey[300]!,
+                            width: 1,
                           ),
-                        );
-                      }).toList();
-                    },
+                        ),
+                      ),
+                      minX: 1,
+                      maxX: lastDay.toDouble(),
+                      minY: 0,
+                      maxY: maxY,
+                      lineBarsData: [
+                        LineChartBarData(
+                          spots: _dailyExpenses,
+                          isCurved: true,
+                          curveSmoothness: 0.2, // 降低曲线平滑度，减少过冲
+                          preventCurveOverShooting: true, // 防止曲线过冲
+                          color: expenseColor,
+                          barWidth: 2.5,
+                          isStrokeCapRound: true,
+                          dotData: FlDotData(
+                            show: true,
+                            getDotPainter: (spot, percent, barData, index) {
+                              return FlDotCirclePainter(
+                                radius: 3,
+                                color: expenseColor,
+                                strokeWidth: 1,
+                                strokeColor:
+                                    isDarkMode ? Colors.black : Colors.white,
+                              );
+                            },
+                            checkToShowDot: (spot, barData) {
+                              // 只在有值且值大于0的地方显示点
+                              return spot.y > 0;
+                            },
+                          ),
+                          belowBarData: BarAreaData(
+                            show: true,
+                            gradient: LinearGradient(
+                              colors: [
+                                expenseColor.withOpacity(0.3),
+                                expenseColor.withOpacity(0.05),
+                              ],
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                            ),
+                            // 确保区域不会低于0
+                            cutOffY: 0,
+                            applyCutOffY: true,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
+              // 在0的下方添加"元/天"标识，放在坐标轴左下角
+              Positioned(
+                left: 2,
+                bottom: 2, // 调整到更靠近左下角
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color:
+                        isDarkMode
+                            ? Colors.grey[800]!.withOpacity(0.7)
+                            : Colors.white.withOpacity(0.8),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: isDarkMode ? Colors.grey[700]! : Colors.grey[300]!,
+                      width: 0.5,
+                    ),
+                  ),
+                  child: Text(
+                    '元/天',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w500,
+                      color:
+                          isDarkMode
+                              ? AppColors.darkTextSecondary
+                              : AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -714,6 +948,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
 
   Widget _buildCategoryList() {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final yearMonth = DateFormat('yyyy-MM').format(_selectedDate);
 
     // 检查是否有分类数据
     if (_categories.isEmpty) {
@@ -752,122 +987,143 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
         final Color categoryColor = category['color'] as Color;
         final double amount = category['amount'] as double;
         final double percentage = category['percentage'] as double;
+        final String categoryName = category['name'] as String;
+        final IconData categoryIcon = category['icon'] as IconData;
 
-        return Container(
-          margin: const EdgeInsets.only(bottom: 16.0),
-          padding: const EdgeInsets.all(12.0),
-          decoration: BoxDecoration(
-            color: Theme.of(context).cardColor,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(isDarkMode ? 0.2 : 0.03),
-                blurRadius: 6,
-                offset: const Offset(0, 2),
+        return GestureDetector(
+          onTap: () {
+            // 导航到分类详情页面
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder:
+                    (context) => CategoryDetailScreen(
+                      categoryName: categoryName,
+                      categoryColor: categoryColor,
+                      categoryIcon: categoryIcon,
+                      initialMonth: yearMonth,
+                    ),
               ),
-            ],
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: categoryColor,
-                  borderRadius: BorderRadius.circular(10),
+            );
+          },
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 16.0),
+            padding: const EdgeInsets.all(12.0),
+            decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(isDarkMode ? 0.2 : 0.03),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
                 ),
-                child: Icon(
-                  category['icon'] as IconData,
-                  color: Colors.white,
-                  size: 18,
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: categoryColor,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(categoryIcon, color: Colors.white, size: 18),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        categoryName,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w500,
+                          color: isDarkMode ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '¥${_formatCurrency(amount)}',
+                        style: TextStyle(
+                          color:
+                              isDarkMode
+                                  ? Colors.white70
+                                  : AppColors.textSecondary,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Text(
-                      category['name'] as String,
+                      '${percentage.toStringAsFixed(1)}%',
                       style: TextStyle(
-                        fontWeight: FontWeight.w500,
+                        fontWeight: FontWeight.w600,
                         color: isDarkMode ? Colors.white : Colors.black,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '¥${_formatCurrency(amount)}',
-                      style: TextStyle(
-                        color:
-                            isDarkMode
-                                ? Colors.white70
-                                : AppColors.textSecondary,
-                        fontSize: 13,
+                    const SizedBox(height: 6),
+                    Container(
+                      width: 100,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: isDarkMode ? Colors.grey[700] : Colors.grey[200],
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: percentage * 100 / 100,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: categoryColor,
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
                 ),
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    '${percentage.toStringAsFixed(1)}%',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: isDarkMode ? Colors.white : Colors.black,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    width: 100,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: isDarkMode ? Colors.grey[700] : Colors.grey[200],
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: percentage * 100 / 100,
-                          height: 6,
-                          decoration: BoxDecoration(
-                            color: categoryColor,
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
     );
   }
 
-  // 计算图表Y轴间隔
+  // 计算图表Y轴间隔，根据数据范围动态调整
   double _calculateInterval() {
     // 找出最大支出金额，用于设置图表Y轴的最大值
     final maxExpense =
         _dailyExpenses.isEmpty
-            ? 100.0
+            ? 300.0 // 默认最大值
             : _dailyExpenses
                 .map((spot) => spot.y)
                 .reduce((max, y) => max > y ? max : y);
 
-    // 根据最大值确定合适的间隔
-    if (maxExpense <= 500) {
-      return 100; // 小于500，间隔为100
-    } else if (maxExpense <= 2000) {
-      return 500; // 小于2000，间隔为500
-    } else if (maxExpense <= 5000) {
-      return 1000; // 小于5000，间隔为1000
-    } else if (maxExpense <= 10000) {
-      return 2000; // 小于10000，间隔为2000
+    // 根据要求实现动态间隔：
+    // - 0-300元：间隔50元
+    // - 300-600元：间隔100元
+    // - 600-1200元：间隔200元
+    // - 以此类推
+    if (maxExpense <= 300) {
+      return 50.0;
+    } else if (maxExpense <= 600) {
+      return 100.0;
+    } else if (maxExpense <= 1200) {
+      return 200.0;
+    } else if (maxExpense <= 2400) {
+      return 400.0;
+    } else if (maxExpense <= 6000) {
+      return 1000.0;
     } else {
-      return 5000; // 大于10000，间隔为5000
+      return 2000.0;
     }
   }
 }

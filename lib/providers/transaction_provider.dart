@@ -4,11 +4,13 @@ import '../services/transaction_service.dart';
 import '../utils/date_util.dart';
 import 'package:provider/provider.dart';
 import '../providers/account_provider.dart';
+import '../providers/budget_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../main.dart'; // 导入navigatorKey
 
 class TransactionProvider with ChangeNotifier {
-  final TransactionService _transactionService = TransactionService();
+  final TransactionService _transactionService;
 
   List<Transaction> _recentTransactions = [];
   List<Transaction> _transactions = [];
@@ -22,8 +24,11 @@ class TransactionProvider with ChangeNotifier {
   static const int _pageSize = 10; // 每页记录数量
 
   // 新增：用于存储特定账户的交易记录
-  List<Transaction> _accountTransactions = [];
+  Map<int, List<Transaction>> _accountTransactions = {};
   bool _isLoadingAccountTransactions = false;
+
+  TransactionProvider({TransactionService? transactionService})
+    : _transactionService = transactionService ?? TransactionService();
 
   List<Transaction> get recentTransactions => _recentTransactions;
   List<Transaction> get transactions => _transactions;
@@ -34,15 +39,31 @@ class TransactionProvider with ChangeNotifier {
   String get currentMonth => _currentMonth;
   bool get hasMoreTransactions => _hasMoreTransactions;
 
+  // 提供对交易服务的访问
+  TransactionService get transactionService => _transactionService;
+
   // 新增：获取特定账户交易记录的 getter 和 loading 状态
-  List<Transaction> get accountTransactions => _accountTransactions;
+  List<Transaction> get accountTransactions =>
+      _accountTransactions.values.expand((e) => e).toList();
   bool get isLoadingAccountTransactions => _isLoadingAccountTransactions;
 
   // 设置当前月份
-  void setCurrentMonth(String month) {
+  Future<void> setCurrentMonth(String month) async {
+    print("[CRITICAL] 设置当前月份: 从 $_currentMonth 变为 $month");
+
+    // 存储原始月份格式以用于调试
+    final oldMonth = _currentMonth;
     _currentMonth = month;
-    loadMonthlyData();
-    notifyListeners();
+
+    // 无论月份是否变化，都强制重新加载数据
+    print("[CRITICAL] 重新加载月份 $month 的数据");
+    notifyListeners(); // 先通知月份变化
+
+    // 强制加载该月份的数据
+    await loadMonthlyData();
+    await fetchAllTransactions();
+
+    print("[CRITICAL] 月份 $month 的数据加载完成");
   }
 
   // 初始化数据
@@ -65,14 +86,66 @@ class TransactionProvider with ChangeNotifier {
 
   // 加载月度数据
   Future<void> loadMonthlyData() async {
+    print("[CRITICAL] 开始加载月度数据: 当前月份=$_currentMonth");
     _setLoading(true);
 
     try {
-      await _fetchMonthlyIncome();
-      await _fetchMonthlyExpense();
+      // 确保_currentMonth的格式正确(格式为yyyyMM)
+      if (_currentMonth.length != 6) {
+        print("[CRITICAL ERROR] 月份格式错误: $_currentMonth，应为yyyyMM格式");
+        _setError('月份格式错误');
+        return;
+      }
+
+      final int year = int.parse(_currentMonth.substring(0, 4));
+      final int month = int.parse(_currentMonth.substring(4, 6));
+
+      print("[CRITICAL] 解析月份: $_currentMonth -> 年:$year, 月:$month");
+
+      // 首先进行调试，打印该月份的所有交易记录
+      await _transactionService.debugPrintMonthTransactions(year, month);
+
+      // 直接调用service方法获取月度收入和支出
+      double income = 0.0;
+      double expense = 0.0;
+
+      try {
+        income = await _transactionService.getMonthlyIncome(year, month);
+        print("[CRITICAL] 获取到月度收入: $income");
+      } catch (e) {
+        print("[CRITICAL ERROR] 获取月度收入失败: $e");
+        income = 0.0;
+      }
+
+      try {
+        expense = await _transactionService.getMonthlyExpense(year, month);
+        print("[CRITICAL] 获取到月度支出: $expense");
+      } catch (e) {
+        print("[CRITICAL ERROR] 获取月度支出失败: $e");
+        expense = 0.0;
+      }
+
+      // 更新数据，确保数据合法
+      _monthlyIncome = income.isNaN ? 0.0 : income;
+      _monthlyExpense = expense.isNaN ? 0.0 : expense;
+
+      print("[CRITICAL] 月度数据更新完成: 收入=$_monthlyIncome, 支出=$_monthlyExpense");
+
       _setError(null);
+
+      // 每次都通知监听器更新UI
+      notifyListeners();
     } catch (e) {
+      print("[CRITICAL ERROR] 获取月度数据失败: $e");
+      print(e.toString());
       _setError('获取月度数据失败：$e');
+
+      // 确保在失败时仍然有合法值
+      _monthlyIncome = 0.0;
+      _monthlyExpense = 0.0;
+
+      // 即使出错也通知UI更新
+      notifyListeners();
     } finally {
       _setLoading(false);
     }
@@ -125,18 +198,32 @@ class TransactionProvider with ChangeNotifier {
 
     try {
       print('正在获取 $_currentMonth 月份的交易记录...');
+
+      // 从_currentMonth提取年和月，确保格式正确
+      if (_currentMonth.length != 6) {
+        print("月份格式错误: $_currentMonth，应为yyyyMM格式");
+        return;
+      }
+
+      final int year = int.parse(_currentMonth.substring(0, 4));
+      final int month = int.parse(_currentMonth.substring(4, 6));
+      final String yearMonthFormatted =
+          "$year-${month.toString().padLeft(2, '0')}";
+
+      // 直接查询该月份的交易
       final allTransactions = await _transactionService.getAllTransactions();
       print('获取到总交易记录数: ${allTransactions.length}');
 
-      // 过滤当前月份的交易
+      // 过滤当前月份的交易，确保日期比较正确
       _transactions =
           allTransactions.where((transaction) {
-            // 将交易日期格式化为yyyyMM格式
-            final transactionMonth = DateUtil.getMonthString(transaction.date);
-            final match = transactionMonth == _currentMonth;
+            final transactionDate = transaction.date;
+            final transactionYearMonth =
+                "${transactionDate.year}-${transactionDate.month.toString().padLeft(2, '0')}";
+            final match = transactionYearMonth == yearMonthFormatted;
 
             print(
-              '交易: ${transaction.id}, 日期: ${transaction.date}, 月份: $transactionMonth, 匹配: $match',
+              '交易: ${transaction.id}, 日期: ${transaction.date}, 月份: $transactionYearMonth, 匹配: $match',
             );
 
             return match;
@@ -177,106 +264,230 @@ class TransactionProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // 添加交易记录
+  // 获取指定账户的所有交易记录
+  Future<void> fetchTransactionsByAccount(int accountId) async {
+    _setLoading(true);
+    try {
+      final accountTransactions = await _transactionService
+          .getTransactionsByAccount(accountId);
+      _accountTransactions[accountId] = accountTransactions;
+      _setError(null);
+    } catch (e) {
+      _setError('获取账户交易记录失败: $e');
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  // 获取已加载的指定账户的交易记录
+  List<Transaction> getAccountTransactions(int accountId) {
+    return _accountTransactions[accountId] ?? [];
+  }
+
+  // 添加交易
   Future<bool> addTransaction(
     Transaction transaction, {
-    required BuildContext context,
+    BuildContext? context,
   }) async {
+    print("[CRITICAL] 开始添加交易: ${transaction.type}, 金额: ${transaction.amount}");
     _setLoading(true);
 
     try {
+      // 添加交易到数据库
       await _transactionService.addTransaction(transaction);
+      print("[CRITICAL] 交易添加成功，ID: ${transaction.id}");
 
-      print("--- [Provider] 交易添加成功，开始同步账户余额 ---");
-      final accountProvider = Provider.of<AccountProvider>(
-        context,
-        listen: false,
-      );
-      await accountProvider.accountService.syncAccountBalances();
-      print("--- [Provider] 账户余额同步完成 ---");
+      // 如果提供了context，就使用AccountProvider同步账户余额
+      if (context != null) {
+        final accountProvider = Provider.of<AccountProvider>(
+          context,
+          listen: false,
+        );
+        print("[CRITICAL] 开始同步账户余额");
+        await accountProvider.accountService.syncAccountBalances();
+        print("[CRITICAL] 账户余额同步完成");
 
-      // 在添加交易后，刷新所有相关数据
+        // 同步账户数据，确保总资产金额正确
+        await accountProvider.syncData();
+      }
+
+      // 先获取交易的年月
+      final transactionMonth = DateUtil.getMonthString(transaction.date);
+      print("[CRITICAL] 交易日期: ${transaction.date}, 月份: $transactionMonth");
+
+      // 优先刷新交易列表，确保UI显示最新交易
       await _fetchRecentTransactions();
-      await fetchAllTransactions(); // 确保所有交易列表也刷新
-      await loadMonthlyData();
 
-      // 同步账户数据，确保总资产金额正确
-      await accountProvider.syncData(); // 刷新 Provider 状态
+      // 如果交易月份与当前月份相同，需要更新月度统计
+      if (transactionMonth == _currentMonth) {
+        print("[CRITICAL] 交易月份匹配当前月份，更新月度统计");
+        // 立即刷新月度数据 - 确保统计数据与交易列表一致
+        await loadMonthlyData();
+      } else {
+        print("[CRITICAL] 交易月份不匹配当前月份，不更新月度统计");
+      }
+
+      // 确保所有交易列表数据更新
+      await fetchAllTransactions();
 
       _setError(null);
       return true;
     } catch (e) {
-      _setError('添加交易记录失败：$e');
+      // 特别处理余额不足的错误
+      if (e.toString().contains('余额不足') || e.toString().contains('无法完成交易')) {
+        _setError('账户余额不足，无法完成交易');
+      } else {
+        _setError('添加交易失败: $e');
+      }
       return false;
     } finally {
       _setLoading(false);
     }
   }
 
-  // 更新交易记录
+  // 更新交易
   Future<bool> updateTransaction(
-    Transaction transaction, {
-    required BuildContext context,
+    Transaction oldTransaction,
+    Transaction newTransaction, {
+    BuildContext? context,
   }) async {
     _setLoading(true);
 
     try {
-      await _transactionService.updateTransaction(transaction);
-
-      print("--- [Provider] 交易更新成功，开始同步账户余额 ---");
-      final accountProvider = Provider.of<AccountProvider>(
-        context,
-        listen: false,
+      // 验证操作是否会导致余额不足
+      await _transactionService.updateTransaction(
+        oldTransaction,
+        newTransaction,
       );
-      await accountProvider.accountService.syncAccountBalances();
-      print("--- [Provider] 账户余额同步完成 ---");
 
+      // 如果提供了context，就使用AccountProvider同步账户余额
+      if (context != null) {
+        final accountProvider = Provider.of<AccountProvider>(
+          context,
+          listen: false,
+        );
+        print("--- [Provider] 交易更新成功，开始同步账户余额 ---");
+        await accountProvider.accountService.syncAccountBalances();
+        print("--- [Provider] 账户余额同步完成 ---");
+
+        // 同步账户数据，确保总资产金额正确
+        await accountProvider.syncData();
+      }
+
+      // 立即刷新交易和月度数据
       await _fetchRecentTransactions();
-      await fetchAllTransactions(); // 确保所有交易列表也刷新
       await loadMonthlyData();
+      await fetchAllTransactions();
 
-      // 同步账户数据，确保总资产金额正确
-      await accountProvider.syncData(); // 刷新 Provider 状态
+      // 强制重新计算月度收入和支出
+      if (_currentMonth.isNotEmpty) {
+        final int year = int.parse(_currentMonth.substring(0, 4));
+        final int month = int.parse(_currentMonth.substring(4, 6));
+
+        _monthlyIncome = await _transactionService.getMonthlyIncome(
+          year,
+          month,
+        );
+        _monthlyExpense = await _transactionService.getMonthlyExpense(
+          year,
+          month,
+        );
+        notifyListeners();
+      }
+
+      // 更新可能受影响的账户交易列表
+      final accountIds = <int>{
+        oldTransaction.accountId,
+        newTransaction.accountId,
+      };
+      if (oldTransaction.toAccountId != null) {
+        accountIds.add(oldTransaction.toAccountId!);
+      }
+      if (newTransaction.toAccountId != null) {
+        accountIds.add(newTransaction.toAccountId!);
+      }
+
+      for (final accountId in accountIds) {
+        if (_accountTransactions.containsKey(accountId)) {
+          await fetchTransactionsByAccount(accountId);
+        }
+      }
 
       _setError(null);
       return true;
     } catch (e) {
-      _setError('更新交易记录失败：$e');
+      // 特别处理余额不足的错误
+      if (e.toString().contains('余额不足') || e.toString().contains('无法完成交易')) {
+        _setError('账户余额不足，无法完成交易更新');
+      } else {
+        _setError('更新交易失败: $e');
+      }
       return false;
     } finally {
       _setLoading(false);
     }
   }
 
-  // 删除交易记录
+  // 删除交易
   Future<bool> deleteTransaction(
-    int id, {
-    required BuildContext context,
+    dynamic transactionOrId, {
+    BuildContext? context,
   }) async {
     _setLoading(true);
-
     try {
-      await _transactionService.deleteTransaction(id);
+      Transaction transaction;
 
-      print("--- [Provider] 交易删除成功，开始同步账户余额 ---");
-      final accountProvider = Provider.of<AccountProvider>(
-        context,
-        listen: false,
-      );
-      await accountProvider.accountService.syncAccountBalances();
-      print("--- [Provider] 账户余额同步完成 ---");
+      // 处理兼容性：如果传入的是int类型的ID而不是Transaction对象
+      if (transactionOrId is int) {
+        final id = transactionOrId;
+        final transactionObj = await _transactionService.getTransaction(id);
+        if (transactionObj == null) {
+          throw Exception('找不到要删除的交易');
+        }
+        transaction = transactionObj;
+      } else if (transactionOrId is Transaction) {
+        transaction = transactionOrId;
+      } else {
+        throw ArgumentError('参数必须是Transaction对象或整数ID');
+      }
 
+      await _transactionService.deleteTransaction(transaction);
+
+      // 如果提供了context，就使用AccountProvider同步账户余额
+      if (context != null) {
+        final accountProvider = Provider.of<AccountProvider>(
+          context,
+          listen: false,
+        );
+        print("--- [Provider] 交易删除成功，开始同步账户余额 ---");
+        await accountProvider.accountService.syncAccountBalances();
+        print("--- [Provider] 账户余额同步完成 ---");
+
+        // 同步账户数据，确保总资产金额正确
+        await accountProvider.syncData();
+      }
+
+      // 立即刷新交易和月度数据
       await _fetchRecentTransactions();
-      await fetchAllTransactions(); // 确保所有交易列表也刷新
       await loadMonthlyData();
+      await fetchAllTransactions();
 
-      // 同步账户数据，确保总资产金额正确
-      await accountProvider.syncData(); // 刷新 Provider 状态
+      // 更新可能受影响的账户交易列表
+      final accountIds = <int>{transaction.accountId};
+      if (transaction.toAccountId != null) {
+        accountIds.add(transaction.toAccountId!);
+      }
+
+      for (final accountId in accountIds) {
+        if (_accountTransactions.containsKey(accountId)) {
+          await fetchTransactionsByAccount(accountId);
+        }
+      }
 
       _setError(null);
       return true;
     } catch (e) {
-      _setError('删除交易记录失败：$e');
+      _setError('删除交易失败: $e');
       return false;
     } finally {
       _setLoading(false);
@@ -359,42 +570,6 @@ class TransactionProvider with ChangeNotifier {
     return DateTime(year, month, day);
   }
 
-  // 新增：加载特定账户的交易记录
-  Future<void> loadTransactionsForAccount(
-    int accountId, {
-    DateTime? startDate,
-    DateTime? endDate,
-  }) async {
-    _setLoadingAccountTransactions(true);
-    try {
-      final transactions = await _transactionService.getTransactionsForAccount(
-        accountId,
-        startDate: startDate,
-      );
-
-      // 如果提供了结束日期，在内存中筛选结果
-      if (endDate != null) {
-        final endDateStr =
-            '${DateFormat('yyyy-MM-dd').format(endDate)} 23:59:59';
-        final endDateTime = DateFormat('yyyy-MM-dd HH:mm:ss').parse(endDateStr);
-        _accountTransactions =
-            transactions.where((tx) {
-              return tx.date.isBefore(endDateTime) ||
-                  tx.date.isAtSameMomentAs(endDateTime);
-            }).toList();
-      } else {
-        _accountTransactions = transactions;
-      }
-
-      _setError(null); // 清除之前的错误
-    } catch (e) {
-      _setError('获取账户交易记录失败: $e');
-      _accountTransactions = []; // 出错时清空列表
-    } finally {
-      _setLoadingAccountTransactions(false);
-    }
-  }
-
   // 新增：设置特定账户交易记录的加载状态
   void _setLoadingAccountTransactions(bool loading) {
     if (_isLoadingAccountTransactions == loading) return; // 避免不必要的通知
@@ -410,5 +585,57 @@ class TransactionProvider with ChangeNotifier {
   void _setError(String? errorMessage) {
     _error = errorMessage;
     notifyListeners();
+  }
+
+  // 批量删除交易
+  Future<bool> deleteTransactions(
+    List<dynamic> transactionIds, {
+    BuildContext? context,
+  }) async {
+    _setLoading(true);
+    bool allSuccess = true;
+
+    try {
+      // 遍历所有交易ID逐个删除
+      for (final transactionId in transactionIds) {
+        try {
+          final success = await deleteTransaction(transactionId);
+          if (!success) {
+            allSuccess = false;
+            print('删除交易失败, ID: $transactionId');
+          }
+        } catch (e) {
+          allSuccess = false;
+          print('删除交易时出错, ID: $transactionId, 错误: $e');
+        }
+      }
+
+      // 如果提供了context，就使用AccountProvider同步账户余额
+      if (context != null) {
+        final accountProvider = Provider.of<AccountProvider>(
+          context,
+          listen: false,
+        );
+        print("--- [Provider] 批量交易删除完成，开始同步账户余额 ---");
+        await accountProvider.accountService.syncAccountBalances();
+        print("--- [Provider] 账户余额同步完成 ---");
+
+        // 同步账户数据，确保总资产金额正确
+        await accountProvider.syncData();
+      }
+
+      // 立即刷新交易和月度数据
+      await _fetchRecentTransactions();
+      await loadMonthlyData();
+      await fetchAllTransactions();
+
+      _setError(null);
+      return allSuccess;
+    } catch (e) {
+      _setError('批量删除交易失败: $e');
+      return false;
+    } finally {
+      _setLoading(false);
+    }
   }
 }

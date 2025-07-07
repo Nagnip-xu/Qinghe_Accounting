@@ -1,0 +1,13 @@
+这个目录需要添加以下图片资源：
+
+1. hero-device.png - 首页展示的设备图片，建议尺寸约为500x900px，展示青禾记账应用界面
+2. screenshot-1.jpg 到 screenshot-5.jpg - 应用截图，建议尺寸为1080x1920px（手机屏幕尺寸），按顺序展示：
+   - screenshot-1.jpg：首页总览界面
+   - screenshot-2.jpg：记账添加界面
+   - screenshot-3.jpg：统计分析界面
+   - screenshot-4.jpg：预算管理界面
+   - screenshot-5.jpg：账户管理界面
+3. android-qr.png 和 ios-qr.png - 下载应用的二维码图片，建议尺寸为300x300px
+4. logo.png - 应用logo，已从assets/images/app_logo.png复制而来
+
+如需更换图片，请按上述文件名和尺寸准备相应图片文件，并替换此目录中的文件。 
