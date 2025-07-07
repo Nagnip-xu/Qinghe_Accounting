@@ -1,4 +1,4 @@
-# 清和记账 (Qinghe Accounting)
+# 青禾记账 (Qinghe Accounting)
 
 一款现代化、功能丰富的个人财务管理应用，基于Flutter框架开发，提供直观易用的记账体验和全面的财务分析功能。
 
