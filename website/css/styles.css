@@ -732,9 +732,31 @@ img {
 }
 
 .qr-item p {
-    font-weight: 600;
-    color: var(--text-primary);
     margin-top: 12px;
+    text-align: center;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.github-link {
+    margin-top: 30px;
+    text-align: center;
+}
+
+.github-link p {
+    font-size: 1.1rem;
+    color: var(--text-secondary);
+}
+
+.github-link a {
+    font-weight: 600;
+    color: var(--primary-color);
+    text-decoration: underline;
+    transition: var(--transition);
+}
+
+.github-link a:hover {
+    color: var(--primary-dark);
 }
 
 /* FAQ样式 */

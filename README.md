@@ -47,6 +47,20 @@
 5. **账户管理**：管理不同类型的账户
 6. **个人设置**：用户个人信息和应用设置
 
+### 应用截图
+
+<div align="center">
+  <div>
+    <img src="website/images/shouye.jpg" alt="首页" width="200"/>
+    <img src="website/images/tongji.jpg" alt="统计分析" width="200"/>
+    <img src="website/images/tianjia.jpg" alt="添加记账" width="200"/>
+  </div>
+  <div>
+    <img src="website/images/yusuan.jpg" alt="预算管理" width="200"/>
+    <img src="website/images/zhanghu.jpg" alt="账户管理" width="200"/>
+  </div>
+</div>
+
 ## 项目结构
 
 ```
