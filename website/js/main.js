@@ -346,7 +346,7 @@ function initScreenshotSlider() {
     // 初始化
     goToSlide(0);
     startAutoplay();
-    
+        
     // 鼠标进入停止自动播放
     slider.addEventListener('mouseenter', stopAutoplay);
     // 鼠标离开恢复自动播放
@@ -558,7 +558,7 @@ function initFaqAccordion() {
         faqItems[0].classList.add('active');
         const firstAnswer = faqItems[0].querySelector('.answer');
         if (firstAnswer) {
-            firstAnswer.style.maxHeight = firstAnswer.scrollHeight + 'px';
+        firstAnswer.style.maxHeight = firstAnswer.scrollHeight + 'px';
         }
     }
 }
@@ -579,7 +579,7 @@ function initParallaxEffect() {
         });
         
         ticking = false;
-    }
+            }
     
     window.addEventListener('scroll', function() {
         if (!ticking) {
@@ -588,9 +588,9 @@ function initParallaxEffect() {
                 ticking = false;
             });
             ticking = true;
-        }
-    });
-    
+            }
+        });
+        
     // 添加视差效果到英雄区域
     const hero = document.querySelector('.hero');
     if (hero) {
